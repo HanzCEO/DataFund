@@ -9,7 +9,8 @@ import { api, type Attestation, type Bounty, type Config, type RunFn, type State
 import { TGAS, callDao, signReview } from "./near";
 
 type Spec = Required<DatasetSpec>;
-const GATEWAYS = ["https://ipfs.io", "https://dweb.link"];
+// Public gateways often rate-limit (HTTP 429). Try several. The file is encrypted and its hash is checked.
+const GATEWAYS = ["https://gateway.pinata.cloud", "https://ipfs.io", "https://dweb.link"];
 
 // ---------- Attestation ----------
 
