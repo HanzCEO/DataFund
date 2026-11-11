@@ -275,7 +275,7 @@ function SubmitPanel({ b, spec, cfg, run }: { b: Bounty; spec: DatasetSpec; cfg:
     return api<{ url: string; sha256: string }>("/api/upload", { content, format: spec.format });
   };
 
-  const loadSample = async (which: "good" | "bad") => setContent(await (await fetch(`/examples/sms-scam-${which}.jsonl`)).text());
+  const loadSample = async (which: "good" | "bad" | "mislabeled") => setContent(await (await fetch(`/examples/sms-scam-${which}.jsonl`)).text());
 
   const precheck = async () => {
     setBusy(true);
@@ -309,6 +309,7 @@ function SubmitPanel({ b, spec, cfg, run }: { b: Bounty; spec: DatasetSpec; cfg:
             <span className="muted">Try a sample:</span>
             <button className="link" onClick={() => loadSample("good")}>good dataset</button>
             <button className="link" onClick={() => loadSample("bad")}>bad dataset</button>
+            <button className="link" onClick={() => loadSample("mislabeled")}>mislabeled dataset</button>
           </div>
         </>
       ) : (
