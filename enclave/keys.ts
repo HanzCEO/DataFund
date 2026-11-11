@@ -30,11 +30,13 @@ export async function initKeys(): Promise<EnclaveKeys> {
   } catch {
     client = undefined;
   }
-  if (client && (await client.isReachable().catch(() => false))) {
+  // A socket means we are in a CVM. Don't probe with isReachable(). Its 500 ms timeout is too short for the guest
+  // agent right after boot on production OS images. Ask for the keys directly and retry while the agent starts.
+  if (client) {
     dstack = client;
     mode = "tee";
-    nearMaterial = (await client.getKey("datafund/near/v1")).key;
-    sealMaterial = (await client.getKey("datafund/seal/v1")).key;
+    nearMaterial = await retry(async () => (await client.getKey("datafund/near/v1")).key);
+    sealMaterial = await retry(async () => (await client.getKey("datafund/seal/v1")).key);
   } else if (ALLOW_DEV_KEYS) {
     mode = "dev";
     const file = join(DATA_DIR, "dev-seed");
@@ -62,6 +64,19 @@ export async function initKeys(): Promise<EnclaveKeys> {
     sealPublicKey: seal.publicKey,
   };
   return keys;
+}
+
+/** Retry a guest agent call for about two minutes. */
+async function retry<T>(f: () => Promise<T>, tries = 24): Promise<T> {
+  for (let i = 1; ; i++) {
+    try {
+      return await f();
+    } catch (e) {
+      if (i >= tries) throw new Error(`dstack guest agent did not answer (${(e as Error).message})`);
+      console.warn(`[enclave] waiting for the dstack guest agent (${(e as Error).message})`);
+      await new Promise((r) => setTimeout(r, 5000));
+    }
+  }
 }
 
 export function getKeys(): EnclaveKeys {
