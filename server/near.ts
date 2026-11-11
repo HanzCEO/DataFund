@@ -1,8 +1,9 @@
-import { Account, KeyPairSigner, providers } from "near-api-js";
-import { DAO_ID, RPC_URL, VERIFIER_ACCOUNT, verifierPrivateKey } from "./config.js";
+import { Account, KeyPairSigner } from "near-api-js";
+import { DAO_ID, RPC_URLS, VERIFIER_ACCOUNT, verifierPrivateKey } from "./config.js";
+import { RoundRobinProvider } from "./rpc.js";
 import type { BountyClaim, BountyView, ProposalView } from "../shared/types.js";
 
-export const provider = new providers.JsonRpcProvider({ url: RPC_URL });
+export const provider = new RoundRobinProvider(RPC_URLS);
 
 export const view = <T>(method: string, args: Record<string, unknown> = {}) =>
   provider.callFunction(DAO_ID, method, args) as Promise<T>;

@@ -1,11 +1,12 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { PUBLIC_RPCS } from "./rpc.js";
 
 try {
   process.loadEnvFile(".env");
 } catch {
-  // .env is optional; real env vars still apply.
+  // .env is optional. Real env vars still apply.
 }
 
 const env = (k: string, d?: string): string => {
@@ -15,7 +16,13 @@ const env = (k: string, d?: string): string => {
 };
 
 export const NETWORK = env("NEAR_NETWORK", "testnet");
-export const RPC_URL = env("NEAR_RPC_URL", NETWORK === "mainnet" ? "https://free.rpc.fastnear.com" : "https://test.rpc.fastnear.com");
+/**
+ * RPC nodes used in round-robin. NEAR_RPC_URLS (comma-separated) replaces the default public list.
+ * A legacy single NEAR_RPC_URL is kept and put first.
+ */
+const list = (v?: string) => (v ?? "").split(",").map((s) => s.trim()).filter(Boolean);
+export const RPC_URLS = [...new Set([...list(process.env.NEAR_RPC_URL), ...(list(process.env.NEAR_RPC_URLS).length ? list(process.env.NEAR_RPC_URLS) : PUBLIC_RPCS[NETWORK] ?? [])])];
+if (!RPC_URLS.length) throw new Error(`No RPC URLs for network ${NETWORK}. Set NEAR_RPC_URLS`);
 export const DAO_ID = env("DAO_ID");
 export const VERIFIER_ACCOUNT = env("VERIFIER_ACCOUNT");
 export const PORT = Number(env("PORT", "8787"));
