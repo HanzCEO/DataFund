@@ -1,5 +1,5 @@
 import OpenAI from "openai";
-import { MIN_SCORE, NEAR_AI_API_KEY, NEAR_AI_BASE_URL, NEAR_AI_MODEL } from "./config.js";
+import { MIN_AGREEMENT, MIN_SCORE, NEAR_AI_API_KEY, NEAR_AI_BASE_URL, NEAR_AI_MODEL } from "./config.js";
 import { fetchDataset, parseRows, sha256, structuralChecks, type Row } from "./dataset.js";
 import type { DatasetSpec, RowJudgement, SubmissionRef, Verdict } from "../shared/types.js";
 
@@ -57,6 +57,14 @@ export async function verify(bountyId: number, spec: DatasetSpec, ref: Submissio
   verdict.score = verdict.ai
     ? Math.round(0.3 * structural + 0.4 * verdict.ai.agreement * 100 + 0.3 * verdict.ai.qualityScore)
     : structural;
+
+  // Wrong labels are the failure rules can't see, and the blind quality rating can't either. Gate on them.
+  if (verdict.ai?.hasLabels) {
+    const ok = verdict.ai.agreement >= MIN_AGREEMENT;
+    const pct = Math.round(verdict.ai.agreement * 100);
+    checks.push({ name: "Labels agree with AI", ok, detail: `${pct}% of ${verdict.ai.sampled} sampled rows (min ${Math.round(MIN_AGREEMENT * 100)}%)` });
+    hardFail ||= !ok;
+  }
 
   if (hardFail) verdict.reasons.push(...checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`));
   if (verdict.score < MIN_SCORE) verdict.reasons.push(`Score ${verdict.score} is below the ${MIN_SCORE} threshold`);
@@ -123,6 +131,7 @@ async function aiReview(spec: DatasetSpec, rows: Row[], textField: string, seed:
     model: NEAR_AI_MODEL,
     completionId: res.id,
     sampled: idx.length,
+    hasLabels: Boolean(labelField),
     agreement: judgements.filter((j) => j.agrees).length / Math.max(1, judgements.length),
     qualityScore: Math.max(0, Math.min(100, Number(json.quality) || 0)),
     summary: String(json.summary ?? ""),

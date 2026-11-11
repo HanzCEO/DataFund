@@ -21,6 +21,8 @@ export const VERIFIER_ACCOUNT = env("VERIFIER_ACCOUNT");
 export const PORT = Number(env("PORT", "8787"));
 export const PUBLIC_URL = env("PUBLIC_URL", `http://localhost:${PORT}`);
 export const MIN_SCORE = Number(env("MIN_SCORE", "70"));
+/** Minimum share of sampled rows where the AI's blind label matches the submitted one. */
+export const MIN_AGREEMENT = Number(env("MIN_AGREEMENT", "0.8"));
 export const POLL_MS = Number(env("POLL_MS", "8000"));
 export const AUTO_VOTE = env("AUTO_VOTE", "true") === "true";
 

@@ -72,6 +72,7 @@ export interface Verdict {
     model: string;
     completionId?: string;
     sampled: number;
+    hasLabels: boolean;
     agreement: number;
     qualityScore: number;
     summary: string;
