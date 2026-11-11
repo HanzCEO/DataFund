@@ -40,7 +40,7 @@ print(json.dumps({"proposal":{"description":"New dataset bounty: "+t,"kind":{"Ad
   "description":json.dumps(spec),"token":"","amount":yocto,"times":slots,"max_deadline":str(48*3600*10**9)}}}}}))' \
       "$2" "$3" "$4" "${5:-3}" "${6:-20}")
     call "$1" add_proposal "$args" '0 NEAR'
-    echo "proposal id: $(( $(view get_last_proposal_id) - 1 ))" ;;
+    echo "proposal id $(( $(view get_last_proposal_id) - 1 ))" ;;
   approve|reject)
     kind=$(view get_proposal "{\"id\":$2}" | json 'import json,sys;print(json.dumps(json.load(sys.stdin)["kind"]))')
     action=$([ "$cmd" = approve ] && echo VoteApprove || echo VoteReject)
@@ -54,17 +54,17 @@ print(json.dumps({"proposal":{"description":"New dataset bounty: "+t,"kind":{"Ad
     up=$(json 'import json,sys;print(json.dumps({"content":open(sys.argv[1]).read(),"format":"jsonl"}))' "$3" |
       curl -sf -X POST "$API/api/upload" -H 'content-type: application/json' -d @-)
     desc=$(json 'import json,sys;u=json.loads(sys.argv[1]);print(json.dumps({"id":int(sys.argv[2]),"description":json.dumps({"url":u["url"],"sha256":u["sha256"]})}))' "$up" "$2")
-    echo "uploaded: $up"
+    echo "uploaded to $up"
     call "$1" bounty_done "$desc" '0 NEAR'
-    echo "payout proposal id: $(( $(view get_last_proposal_id) - 1 )). The verifier votes within ~10s; watch the UI." ;;
+    echo "payout proposal id $(( $(view get_last_proposal_id) - 1 )). The verifier votes within ~10s. Watch the UI." ;;
   status)
-    echo "treasury available: $(view get_available_amount | json 'import sys;print(int(sys.stdin.read().strip().strip(chr(34)))/10**24)') NEAR"
+    echo "treasury has $(view get_available_amount | json 'import sys;print(int(sys.stdin.read().strip().strip(chr(34)))/10**24)') NEAR available"
     view get_bounties '{"from_index":0,"limit":100}' | json 'import json,sys
 for b in json.load(sys.stdin):
   t=json.loads(b["description"]).get("title","?") if b["description"].startswith("{") else b["description"]
   print("bounty #%d: %s | %s NEAR x %d slots" % (b["id"], t, int(b["amount"])/10**24, b["times"]))'
     if [ -n "${1:-}" ]; then
-      $NEAR account view-account-summary "$1" network-config "$NET" now 2>&1 | grep -i "native account balance" | tr -s ' ' || echo "$1: not found"
+      $NEAR account view-account-summary "$1" network-config "$NET" now 2>&1 | grep -i "native account balance" | tr -s ' ' || echo "$1 not found"
     fi ;;
   *) sed -n '2,12p' "$0" ;;
 esac

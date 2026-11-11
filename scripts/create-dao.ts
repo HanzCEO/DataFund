@@ -1,5 +1,5 @@
 // Creates the community data fund DAO from the public Sputnik DAO v2 factory.
-// Usage: OWNER=... VERIFIER=... DAO_NAME=... npm run setup:dao
+// Run with OWNER=... VERIFIER=... DAO_NAME=... npm run setup:dao
 // Requires the OWNER key in ~/.near-credentials/testnet (near-cli legacy keychain).
 import { execFileSync } from "node:child_process";
 
@@ -17,14 +17,14 @@ const policy = {
   roles: [
     // Anyone can propose (e.g. a new dataset bounty) by posting the proposal bond.
     { name: "all", kind: "Everyone", permissions: ["*:AddProposal"], vote_policy: {} },
-    // Community council: votes on bounties, transfers, membership.
+    // Community council. Votes on bounties, transfers and membership.
     {
       name: "council",
       kind: { Group: [OWNER] },
       permissions: ["*:AddProposal", "*:VoteApprove", "*:VoteReject", "*:VoteRemove", "*:Finalize"],
       vote_policy: {},
     },
-    // AI verifier bot: can ONLY approve/reject bounty payouts. One vote decides.
+    // AI verifier bot. It can ONLY approve/reject bounty payouts. One vote decides.
     {
       name: "verifier",
       kind: { Group: [VERIFIER] },
@@ -33,8 +33,8 @@ const policy = {
     },
   ],
   default_vote_policy: { weight_kind: "RoleWeight", quorum: "0", threshold: [1, 2] },
-  // Must be 0: on the deployed Sputnik v2, bounty_done() rejects deposits but
-  // internally asserts deposit == proposal_bond, so any bond > 0 breaks payouts.
+  // Must be 0. On the deployed Sputnik v2, bounty_done() rejects deposits but
+  // internally asserts deposit == proposal_bond. Any bond > 0 breaks payouts.
   proposal_bond: "0",
   proposal_period: NS(72),
   bounty_bond: NEAR(0.1),
@@ -44,7 +44,7 @@ const policy = {
 const args = {
   config: {
     name: DAO_NAME,
-    purpose: "Community data fund: pool money, fund dataset bounties, pay contributors when an AI verifier accepts their data.",
+    purpose: "Community data fund. Pool money, fund dataset bounties and pay contributors when an AI verifier accepts their data.",
     metadata: "",
   },
   policy,
@@ -66,7 +66,7 @@ execFileSync(
   ],
   { stdio: "inherit" },
 );
-console.log(`\nDAO: ${DAO_NAME}.${FACTORY}`);
+console.log(`\nCreated DAO ${DAO_NAME}.${FACTORY}`);
 
 function must(k: string): string {
   const v = process.env[k];

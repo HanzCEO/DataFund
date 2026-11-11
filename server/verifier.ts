@@ -58,7 +58,7 @@ export async function verify(bountyId: number, spec: DatasetSpec, ref: Submissio
     ? Math.round(0.3 * structural + 0.4 * verdict.ai.agreement * 100 + 0.3 * verdict.ai.qualityScore)
     : structural;
 
-  // Wrong labels are the failure rules can't see, and the blind quality rating can't either. Gate on them.
+  // Rule checks and the blind quality rating both miss wrong labels. Low agreement is a hard failure.
   if (verdict.ai?.hasLabels) {
     const ok = verdict.ai.agreement >= MIN_AGREEMENT;
     const pct = Math.round(verdict.ai.agreement * 100);
@@ -66,7 +66,7 @@ export async function verify(bountyId: number, spec: DatasetSpec, ref: Submissio
     hardFail ||= !ok;
   }
 
-  if (hardFail) verdict.reasons.push(...checks.filter((c) => !c.ok).map((c) => `${c.name}: ${c.detail}`));
+  if (hardFail) verdict.reasons.push(...checks.filter((c) => !c.ok).map((c) => `${c.name} failed (${c.detail})`));
   if (verdict.score < MIN_SCORE) verdict.reasons.push(`Score ${verdict.score} is below the ${MIN_SCORE} threshold`);
   verdict.decision = !hardFail && verdict.score >= MIN_SCORE ? "approve" : "reject";
   if (verdict.decision === "approve") verdict.reasons.push(`Score ${verdict.score} ≥ ${MIN_SCORE} and all hard checks passed`);
@@ -74,8 +74,8 @@ export async function verify(bountyId: number, spec: DatasetSpec, ref: Submissio
 }
 
 /**
- * Blind re-labelling: the model sees a sample WITHOUT the submitted labels and labels it itself.
- * We compute agreement ourselves, so a contributor can't talk the model into a high score.
+ * Blind re-labelling. The model sees a sample WITHOUT the submitted labels and labels it itself.
+ * We compare labels ourselves instead of asking the model for an agreement score.
  */
 async function aiReview(spec: DatasetSpec, rows: Row[], textField: string, seed: string) {
   const labelField = Object.keys(spec.fields).find((f) => spec.fields[f].includes("|"));
@@ -92,11 +92,11 @@ async function aiReview(spec: DatasetSpec, rows: Row[], textField: string, seed:
     "Reply with ONE JSON object and nothing else.",
   ].join(" ");
   const user = [
-    `Dataset: ${spec.title}`,
-    `Guidelines: ${spec.guidelines}`,
-    labelField ? `For each row, choose the correct "${labelField}" from: ${labels.join(", ")}.` : "",
-    "Also rate overall quality 0-100: realistic, diverse, follows guidelines, no personal data.",
-    `JSON shape: {"labels":[{"n":0,"label":"...","reason":"<10 words"}],"quality":0,"summary":"<2 sentences"}`,
+    `The dataset is "${spec.title}".`,
+    `The guidelines say "${spec.guidelines}"`,
+    labelField ? `For each row, choose the correct "${labelField}" from ${labels.join(", ")}.` : "",
+    "Also rate overall quality 0-100 (realistic, diverse, follows guidelines, no personal data).",
+    `Use this JSON shape {"labels":[{"n":0,"label":"...","reason":"<10 words"}],"quality":0,"summary":"<2 sentences"}`,
     `<rows>\n${JSON.stringify(sample)}\n</rows>`,
   ].join("\n");
 
@@ -105,7 +105,7 @@ async function aiReview(spec: DatasetSpec, rows: Row[], textField: string, seed:
     temperature: 0,
     max_tokens: 3000,
     messages: [{ role: "system", content: system }, { role: "user", content: user }],
-    // NEAR AI Cloud extension: cap hidden reasoning so responses stay fast and cheap.
+    // NEAR AI Cloud extension that caps hidden reasoning so responses stay fast and cheap.
     ...({ thinking_token_budget: 512 } as object),
   });
   const text = res.choices[0]?.message?.content ?? "";

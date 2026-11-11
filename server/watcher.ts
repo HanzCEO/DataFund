@@ -21,7 +21,7 @@ export function startWatcher() {
         handle(p).finally(() => inFlight.delete(p.id));
       }
     } catch (e) {
-      console.error("[watcher] poll failed:", (e as Error).message);
+      console.error(`[watcher] poll failed (${(e as Error).message})`);
     }
   };
   tick();
@@ -41,18 +41,18 @@ async function handle(p: ProposalView) {
       verdict.proposalId = p.id;
       verdict.contributor = kind.receiver_id;
       putVerdict(verdict);
-      console.log(`[watcher] #${p.id} ${kind.receiver_id}: score ${verdict.score} -> ${verdict.decision}`);
+      console.log(`[watcher] #${p.id} ${kind.receiver_id} scored ${verdict.score} -> ${verdict.decision}`);
     }
-    // If AI is configured but failed, don't auto-reject on structural checks alone; retry next poll.
-    if (verdict.aiError && verdict.decision === "approve") throw new Error(`AI review failed: ${verdict.aiError}`);
+    // If AI is configured but failed, don't auto-reject on structural checks alone. Retry next poll.
+    if (verdict.aiError && verdict.decision === "approve") throw new Error(`AI review failed (${verdict.aiError})`);
     if (!AUTO_VOTE) return;
     verdict.voteTx = await vote(p, verdict.decision === "approve");
     delete verdict.voteError;
     putVerdict(verdict);
-    console.log(`[watcher] #${p.id} voted ${verdict.decision}: ${verdict.voteTx}`);
+    console.log(`[watcher] #${p.id} voted ${verdict.decision} in ${verdict.voteTx}`);
   } catch (e) {
     const msg = (e as Error).message;
-    console.error(`[watcher] #${p.id} failed:`, msg);
+    console.error(`[watcher] #${p.id} failed (${msg})`);
     if (verdict) putVerdict({ ...verdict, voteError: msg });
     else
       putVerdict({

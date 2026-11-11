@@ -18,7 +18,7 @@ app.get("/api/config", (c) =>
   c.json({ daoId: DAO_ID, network: NETWORK, explorer: EXPLORER, verifier: VERIFIER_ACCOUNT, aiEnabled: aiEnabled(), model: NEAR_AI_MODEL, minScore: MIN_SCORE }),
 );
 
-// Cache chain reads briefly: every open browser polls this, and public RPCs rate-limit.
+// Cache chain reads briefly. Every open browser polls this, and public RPCs rate-limit.
 let cached: { at: number; body: unknown } | undefined;
 app.get("/api/state", async (c) => {
   if (cached && Date.now() - cached.at < 4000) return c.json(cached.body as object);
@@ -119,7 +119,7 @@ app.get("/api/files/:name", async (c) => {
   }
 });
 
-/** Dry-run the verifier before submitting on-chain (no vote). Lightly rate-limited: it can spend AI credits. */
+/** Dry-run the verifier before submitting on-chain (no vote). Lightly rate-limited because it can spend AI credits. */
 const hits = new Map<string, number[]>();
 app.post("/api/precheck", async (c) => {
   const ip = c.req.header("x-forwarded-for") ?? "local";

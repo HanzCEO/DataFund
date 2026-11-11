@@ -10,7 +10,7 @@ export const MAX_BYTES = 2 * 1024 * 1024;
 
 export const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
 
-/** Fetch a dataset by URL. Our own uploads are read from disk; external URLs are SSRF-guarded. */
+/** Fetch a dataset by URL. Our own uploads are read from disk. External URLs are SSRF-guarded. */
 export async function fetchDataset(url: string): Promise<string> {
   const own = `${PUBLIC_URL}/api/files/`;
   if (url.startsWith(own)) {
@@ -27,7 +27,7 @@ export async function fetchDataset(url: string): Promise<string> {
       current = new URL(res.headers.get("location")!, current);
       continue;
     }
-    if (!res.ok) throw new Error(`Fetch failed: HTTP ${res.status}`);
+    if (!res.ok) throw new Error(`Fetch failed with HTTP ${res.status}`);
     return readCapped(res);
   }
   throw new Error("Too many redirects");
@@ -118,7 +118,7 @@ const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
 const PHONE = /(?:\+?\d[\s().-]?){9,}\d/;
 const INJECTION = /ignore (all |any )?(previous|prior|above) instructions|you are (now )?an? (ai|assistant)|system prompt|score (this|it) (100|highly)/i;
 
-/** Deterministic checks. Returns checks plus a 0-100 structural score; any hard failure forces rejection. */
+/** Deterministic checks. Returns checks plus a 0-100 structural score. Any hard failure forces rejection. */
 export function structuralChecks(rows: Row[], parseErrors: number, spec: DatasetSpec) {
   const checks: Check[] = [];
   const fieldNames = Object.keys(spec.fields);
@@ -138,7 +138,7 @@ export function structuralChecks(rows: Row[], parseErrors: number, spec: Dataset
       return typeof v !== "string" && typeof v !== "number";
     }),
   ).length;
-  checks.push({ name: "Matches schema", ok: badSchema === 0, detail: badSchema ? `${badSchema} rows with missing/invalid fields` : `fields: ${fieldNames.join(", ")}` });
+  checks.push({ name: "Matches schema", ok: badSchema === 0, detail: badSchema ? `${badSchema} rows with missing/invalid fields` : `has fields ${fieldNames.join(", ")}` });
 
   const textField = fieldNames.find((f) => spec.fields[f] === "string") ?? fieldNames[0];
   const norm = rows.map((r) => String(r[textField] ?? "").toLowerCase().replace(/\s+/g, " ").trim());
@@ -157,7 +157,7 @@ export function structuralChecks(rows: Row[], parseErrors: number, spec: Dataset
     checks.push({
       name: `Balanced "${f}"`,
       ok: maxShare <= 0.75,
-      detail: labels.map((l, i) => `${l}: ${counts[i]}`).join(", "),
+      detail: labels.map((l, i) => `${counts[i]} ${l}`).join(", "),
     });
   }
 
