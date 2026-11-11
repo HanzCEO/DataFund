@@ -5,12 +5,18 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "dev": "concurrently -n server,web \"npm:dev:server\" \"npm:dev:web\"",
+    "dev": "concurrently -n enclave,server,web \"npm:dev:enclave\" \"npm:dev:server\" \"npm:dev:web\"",
     "dev:server": "tsx watch server/index.ts",
     "dev:web": "vite",
     "build": "vite build",
     "setup:dao": "tsx scripts/create-dao.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "dev:enclave": "ENCLAVE_DEV=true tsx watch enclave/index.ts",
+    "start:enclave": "tsx enclave/index.ts",
+    "start:server": "tsx server/index.ts",
+    "selftest": "ENCLAVE_DEV=true ENCLAVE_DATA_DIR=data/selftest tsx scripts/selftest.ts",
+    "examples": "tsx scripts/make-examples.ts",
+    "enclave:approve": "tsx scripts/approve-enclave.ts"
   },
   "devDependencies": {
     "@types/node": "^26.6.6",
@@ -30,6 +36,9 @@
     "@near-wallet-selector/meteor-wallet": "^10.1.4",
     "@near-wallet-selector/modal-ui": "^10.1.4",
     "@near-wallet-selector/my-near-wallet": "^10.1.4",
+    "@noble/curves": "^1.8.1",
+    "@noble/hashes": "^1.8.0",
+    "@phala/dstack-sdk": "^0.5.8",
     "buffer": "^6.0.3",
     "hono": "^4.13.17",
     "lucide-react": "^1.72.0",
