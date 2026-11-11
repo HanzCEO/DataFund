@@ -4,6 +4,8 @@ import { setupMyNearWallet } from "@near-wallet-selector/my-near-wallet";
 import { setupMeteorWallet } from "@near-wallet-selector/meteor-wallet";
 import "@near-wallet-selector/modal-ui/styles.css";
 import { transactions } from "near-api-js";
+import { Buffer } from "buffer";
+import type { SignedRequest } from "../../shared/types";
 
 export const TGAS = 1_000_000_000_000n;
 const YOCTO = 10n ** 24n;
@@ -57,4 +59,24 @@ export async function callDao(daoId: string, methodName: string, args: object, d
 export async function chipIn(daoId: string, amount: bigint) {
   const w = await selector.wallet();
   return w.signAndSendTransaction({ receiverId: daoId, actions: [transactions.transfer(amount)] });
+}
+
+/** Sign a NEP-413 message for the enclave. Nothing is sent on-chain and it costs no gas. */
+export async function signReview(daoId: string, message: object): Promise<SignedRequest> {
+  const w = await selector.wallet();
+  if (!("signMessage" in w) || typeof w.signMessage !== "function") throw new Error("This wallet can't sign messages");
+  const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(32)));
+  const callbackUrl = window.location.href;
+  const msg = JSON.stringify(message);
+  const signed = await w.signMessage({ message: msg, recipient: daoId, nonce, callbackUrl });
+  if (!signed?.signature) throw new Error("The wallet returned no signature");
+  return {
+    accountId: signed.accountId,
+    publicKey: signed.publicKey,
+    signature: signed.signature,
+    message: msg,
+    nonce: nonce.toString("base64"),
+    recipient: daoId,
+    callbackUrl,
+  };
 }

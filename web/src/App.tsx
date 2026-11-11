@@ -23,22 +23,13 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import type { BountyClaim, BountyView, DatasetSpec, ProposalView, Verdict } from "../../shared/types";
+import type { BountyClaim, DatasetSpec, ProposalView, ReviewMode, TaskType, Verdict } from "../../shared/types";
+import { labelsOf, MANUAL_MIN_ROWS, MAX_REVIEW_HOURS, MIN_SAMPLE, TASK_FIELDS, TASK_INFO } from "../../shared/spec";
+import { api, type Bounty, type Config, type RunFn, type State } from "./api";
+import { EnclavePanel, SubmitPanel, VerdictView } from "./submission";
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate, useNavigationType, useParams } from "react-router";
 import { TGAS, callDao, chipIn, currentAccount, initWallet, showSignIn, signOut, toNear, toYocto } from "./near";
 
-type Config = { daoId: string; network: string; explorer: string; verifier: string; aiEnabled: boolean; model: string; minScore: number };
-type Bounty = BountyView & { claims: number; spec: DatasetSpec | null };
-type State = {
-  available: string;
-  total: string;
-  council: string[];
-  bountyBond: string;
-  proposalBond: string;
-  bounties: Bounty[];
-  proposals: ProposalView[];
-  verdicts: Record<string, Verdict>;
-};
 type ClaimRow = BountyClaim & { account: string };
 type BountyDetail = {
   bounty: Bounty | null;
@@ -46,19 +37,9 @@ type BountyDetail = {
   submissions: { proposal: ProposalView; verdict: Verdict | null }[];
   checkedAccounts: number;
 };
-type RunFn = (label: string, f: () => Promise<unknown>) => Promise<void>;
-
-const api = async <T,>(path: string, body?: unknown): Promise<T> => {
-  const res = await fetch(path, body ? { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : undefined);
-  const json = await res.json();
-  if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
-  return json;
-};
-
 const ICON = { size: 20, strokeWidth: 1.75 } as const;
 const pad = (n: number) => String(n).padStart(2, "0");
 const titleOf = (b: Bounty) => b.spec?.title ?? b.description.slice(0, 80);
-const labelsOf = (spec: DatasetSpec | null) => Object.values(spec?.fields ?? {}).find((v) => v.includes("|"))?.split("|") ?? [];
 const nsToDate = (ns: string) => new Date(Number(BigInt(ns) / 1_000_000n));
 /** yocto → NEAR as a float, for proportions only (never for amounts shown or sent). */
 const nearFloat = (yocto: bigint) => Number(yocto / 10n ** 18n) / 1e6;
@@ -277,6 +258,7 @@ export default function App() {
         <div className="col col-side">
           <Shelf bounties={open} needle={needle} query={query} selected={featured} onSelect={selectBounty} onPropose={openPropose} />
           <Treasury cfg={cfg} state={state} account={account} daoUrl={daoUrl} run={run} />
+          <EnclavePanel cfg={cfg} state={state} />
           <HowItWorks cfg={cfg} state={state} account={account} />
         </div>
       </div>
@@ -385,25 +367,33 @@ function HowVerified({ cfg }: { cfg: Config }) {
       {open && (
         <ol className="rules">
           <li>
-            <b>Structural checks</b>
-            <span>Schema, row count, duplicates, personal data and prompt-injection attempts.</span>
+            <b>Encrypted in your browser</b>
+            <span>Only the verifier enclave (an Intel TDX machine the DAO approved by vote) can decrypt it. Not the requester, not the server.</span>
           </li>
           <li>
-            <b>Blind AI review</b>
+            <b>Every row checked</b>
+            <span>Schema, row count, duplicates, personal data and prompt-injection attempts, on the whole file.</span>
+          </li>
+          <li>
+            <b>Blind AI redo</b>
             <span>
               {cfg.aiEnabled ? (
-                <>A sample is re-labelled by <code>{cfg.model}</code> on NEAR AI Cloud without the submitted labels.</>
+                <><code>{cfg.model}</code> redoes every row (500 random rows past 2,000) without seeing the submitted answers. Junk can't hide in the rows nobody looks at.</>
               ) : (
                 <>Off (no NEAR AI key). Only structural checks run.</>
               )}
             </span>
           </li>
           <li>
-            <b>Vote</b>
+            <b>Decision</b>
             <span>
-              <code>{cfg.verifier}</code> approves at score ≥ {cfg.minScore}, otherwise rejects. It can vote on payouts and
-              nothing else.
+              Automatic bounties pass at score ≥ {cfg.minScore}. Manual bounties let the requester review a sample picked by a block
+              hash nobody knew at submission, with auto review as the fallback. The enclave casts the vote and can't vote on anything else.
             </span>
+          </li>
+          <li>
+            <b>Release</b>
+            <span>Once two RPC providers confirm the payout, the enclave publishes the key and the dataset becomes public.</span>
           </li>
         </ol>
       )}
@@ -511,7 +501,7 @@ function Featured({ b, cfg, state, account, claim, run, inDashboard }: { b: Boun
       )}
       <HowVerified cfg={cfg} />
 
-      {open && claim && !claim.completed && spec && <SubmitPanel b={b} spec={spec} cfg={cfg} run={run} />}
+      {open && claim && !claim.completed && spec && <SubmitPanel b={b} spec={spec} cfg={cfg} state={state} run={run} />}
     </>
   );
 }
@@ -537,73 +527,6 @@ function NoBounties({ onPropose }: { onPropose: () => void }) {
         </div>
       </div>
     </>
-  );
-}
-
-function SubmitPanel({ b, spec, cfg, run }: { b: Bounty; spec: DatasetSpec; cfg: Config; run: RunFn }) {
-  const [mode, setMode] = useState<"paste" | "url">("paste");
-  const [content, setContent] = useState("");
-  const [url, setUrl] = useState("");
-  const [verdict, setVerdict] = useState<Verdict>();
-  const [busy, setBusy] = useState(false);
-  const [err, setErr] = useState("");
-
-  const resolve = async () => {
-    if (mode === "url") return { url, sha256: "" };
-    return api<{ url: string; sha256: string }>("/api/upload", { content, format: spec.format });
-  };
-
-  const loadSample = async (which: "good" | "bad" | "mislabeled") => setContent(await (await fetch(`/examples/sms-scam-${which}.jsonl`)).text());
-
-  const precheck = async () => {
-    setBusy(true);
-    setErr("");
-    try {
-      const ref = await resolve();
-      setVerdict(await api<Verdict>("/api/precheck", { bountyId: b.id, ...ref }));
-    } catch (e) {
-      setErr((e as Error).message);
-    }
-    setBusy(false);
-  };
-
-  const submit = () =>
-    run("Submit", async () => {
-      const ref = await resolve();
-      const sha = ref.sha256 || verdict?.sha256 || "";
-      await callDao(cfg.daoId, "bounty_done", { id: b.id, description: JSON.stringify({ url: ref.url, sha256: sha }) }, 0n, 100n * TGAS);
-    });
-
-  const empty = mode === "paste" ? !content : !url;
-  return (
-    <div className="submit">
-      {spec.guidelines && <p className="guidelines">{spec.guidelines}</p>}
-      <div className="tabs" role="tablist">
-        <button role="tab" aria-selected={mode === "paste"} className={mode === "paste" ? "on" : ""} onClick={() => setMode("paste")}>Paste data</button>
-        <button role="tab" aria-selected={mode === "url"} className={mode === "url" ? "on" : ""} onClick={() => setMode("url")}>Link (https)</button>
-      </div>
-      {mode === "paste" ? (
-        <>
-          <textarea rows={8} value={content} onChange={(e) => setContent(e.target.value)} placeholder={spec.format === "jsonl" ? '{"text": "...", "label": "..."}' : "text,label"} aria-label="Dataset" />
-          <div className="row samples">
-            <span className="muted">Try a sample</span>
-            <button className="link" onClick={() => loadSample("good")}>good dataset</button>
-            <button className="link" onClick={() => loadSample("bad")}>bad dataset</button>
-            <button className="link" onClick={() => loadSample("mislabeled")}>mislabeled dataset</button>
-          </div>
-        </>
-      ) : (
-        <input value={url} onChange={(e) => setUrl(e.target.value)} placeholder="https://raw.githubusercontent.com/.../data.jsonl" aria-label="Dataset URL" />
-      )}
-      <div className="row">
-        <button className="ghost" disabled={busy || empty} onClick={precheck}>
-          {busy ? "Checking…" : "Precheck (free, no vote)"}
-        </button>
-        <button disabled={busy || empty} onClick={submit}>Submit on-chain</button>
-      </div>
-      {err && <p className="err">{err}</p>}
-      {verdict && <VerdictView v={verdict} cfg={cfg} />}
-    </div>
   );
 }
 
@@ -657,7 +580,14 @@ function Shelf({ bounties, needle, query, selected, onSelect, onPropose }: { bou
 function briefLine(b: Bounty) {
   const hours = Number(BigInt(b.max_deadline) / 3_600_000_000_000n);
   const labels = labelsOf(b.spec);
-  return [b.spec?.format.toUpperCase(), b.spec && `${b.spec.minRows}+ rows`, labels.length && labels.join(" / "), `${hours} h to deliver`].filter(Boolean).join(", ");
+  return [
+    b.spec && TASK_INFO[b.spec.task].name,
+    b.spec?.format.toUpperCase(),
+    b.spec && `${b.spec.minRows}+ rows`,
+    b.spec?.task === "classification" && labels.length && labels.join(" / "),
+    b.spec?.review === "manual" && "reviewed by requester",
+    `${hours} h to deliver`,
+  ].filter(Boolean).join(", ");
 }
 
 const WAFFLE = 60;
@@ -722,8 +652,8 @@ function HowItWorks({ cfg, state, account }: { cfg: Config; state: State; accoun
   const steps: [ReactNode, string, ReactNode][] = [
     [<ScanSearch {...ICON} />, "Pick a bounty", "Each open bounty says what data it wants, how many rows, and what it pays."],
     [<Hand {...ICON} />, "Claim a slot", <>Post a {toNear(state.bountyBond)} NEAR bond to reserve your spot. The clock starts now.</>],
-    [<Upload {...ICON} />, "Submit your dataset", <>Paste it or link a JSONL or CSV file. Run the free precheck first to see your score.</>],
-    [<ShieldCheck {...ICON} />, "AI verifies it", <>The verifier checks every rule and relabels a sample blind. A score of {cfg.minScore} or more passes.</>],
+    [<Upload {...ICON} />, "Submit your dataset", <>It's encrypted in your browser and stored on IPFS. Run the free precheck first to see your score.</>],
+    [<ShieldCheck {...ICON} />, "The enclave verifies it", <>It checks every row and redoes them blind with AI. A score of {cfg.minScore} or more passes, or the requester reviews a sample.</>],
     [<Coins {...ICON} />, "Get paid", "The DAO pays the reward straight to your wallet. No one in between."],
   ];
   return (
@@ -766,20 +696,31 @@ const bountyDone = (p: ProposalView) => (typeof p.kind === "object" ? (p.kind.Bo
 
 function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Config; state: State; account: string | null; run: RunFn; open: boolean; setOpen: (v: boolean) => void }) {
   const [f, setF] = useState({
-    title: "", guidelines: "", format: "jsonl", textField: "text", labelField: "label", labels: "positive, negative",
-    minRows: "20", reward: "1", slots: "3", hours: "48",
+    title: "", guidelines: "", format: "jsonl", task: "classification" as TaskType, review: "auto" as ReviewMode,
+    textField: "text", labelField: "label", labels: "positive, negative", minAgreement: "",
+    minRows: "20", sampleSize: String(MIN_SAMPLE), reviewHours: "48", reward: "1", slots: "3", hours: "48",
   });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
+  const manual = f.review === "manual";
   const spec = useMemo<DatasetSpec>(() => {
     const labels = f.labels.split(",").map((s) => s.trim()).filter(Boolean);
+    const fields =
+      f.task === "classification"
+        ? { [f.textField.trim() || "text"]: "string", ...(labels.length ? { [f.labelField.trim() || "label"]: labels.join("|") } : {}) }
+        : TASK_FIELDS[f.task];
     return {
       title: f.title.trim(),
       format: f.format as "jsonl" | "csv",
-      fields: { [f.textField.trim() || "text"]: "string", ...(labels.length ? { [f.labelField.trim() || "label"]: labels.join("|") } : {}) },
-      minRows: Number(f.minRows) || 1,
+      fields,
+      minRows: Math.max(Number(f.minRows) || 1, manual ? MANUAL_MIN_ROWS : 1),
       guidelines: f.guidelines.trim(),
+      task: f.task,
+      review: f.review,
+      requester: account ?? "",
+      minAgreement: (Number(f.minAgreement) || Math.round(TASK_INFO[f.task].minAgreement * 100)) / 100,
+      ...(manual ? { sampleSize: Math.max(MIN_SAMPLE, Number(f.sampleSize) || MIN_SAMPLE), reviewHours: Math.min(MAX_REVIEW_HOURS, Math.max(1, Number(f.reviewHours) || 48)) } : {}),
     };
-  }, [f]);
+  }, [f, manual, account]);
 
   const propose = () =>
     run("Propose bounty", () =>
@@ -821,11 +762,43 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
           <div className="form">
             <label className="wide">Title<input value={f.title} onChange={set("title")} placeholder="Customer support messages labeled by intent" /></label>
             <label className="wide">Guidelines<textarea rows={3} value={f.guidelines} onChange={set("guidelines")} placeholder="What makes a good row? What must be avoided?" /></label>
+            <label>Task type
+              <select value={f.task} onChange={set("task")}>
+                {(Object.keys(TASK_INFO) as TaskType[]).map((t) => <option key={t} value={t}>{TASK_INFO[t].name}</option>)}
+              </select>
+            </label>
             <label>Format<select value={f.format} onChange={set("format")}><option value="jsonl">JSONL</option><option value="csv">CSV</option></select></label>
-            <label>Text field<input value={f.textField} onChange={set("textField")} /></label>
-            <label>Label field<input value={f.labelField} onChange={set("labelField")} /></label>
-            <label>Allowed labels (comma-separated)<input value={f.labels} onChange={set("labels")} /></label>
+            {f.task === "classification" ? (
+              <>
+                <label>Text field<input value={f.textField} onChange={set("textField")} /></label>
+                <label>Label field<input value={f.labelField} onChange={set("labelField")} /></label>
+                <label className="wide">Allowed labels (comma-separated)<input value={f.labels} onChange={set("labels")} /></label>
+              </>
+            ) : (
+              <p className="wide small muted form-note">
+                Each row has {Object.keys(TASK_FIELDS[f.task]).map((k, i, all) => <Fragment key={k}><code>{k}</code>{i < all.length - 1 ? (i === all.length - 2 ? " and " : ", ") : ""}</Fragment>)}.
+                The AI {TASK_INFO[f.task].blind} without seeing the submitted answer.
+              </p>
+            )}
+            <label>Review
+              <select value={f.review} onChange={set("review")}>
+                <option value="auto">Automatic (enclave decides)</option>
+                <option value="manual">Manual (I review a sample)</option>
+              </select>
+            </label>
+            <label>AI agreement needed (%)<input value={f.minAgreement} onChange={set("minAgreement")} inputMode="numeric" placeholder={String(Math.round(TASK_INFO[f.task].minAgreement * 100))} /></label>
             <label>Min rows<input value={f.minRows} onChange={set("minRows")} inputMode="numeric" /></label>
+            {manual && (
+              <>
+                <label>Random rows I review<input value={f.sampleSize} onChange={set("sampleSize")} inputMode="numeric" /></label>
+                <label>Hours I have to decide<input value={f.reviewHours} onChange={set("reviewHours")} inputMode="numeric" /></label>
+                <p className="wide small muted form-note">
+                  You'll see {spec.sampleSize} random rows plus rows the AI disagrees with, never more than 20% of a file. That keeps
+                  contributors safe from a reject-and-keep. Manual bounties need at least {MANUAL_MIN_ROWS} rows. If you don't decide in{" "}
+                  {spec.reviewHours} h, auto review decides.
+                </p>
+              </>
+            )}
             <label>Reward per contributor (NEAR)<input value={f.reward} onChange={set("reward")} inputMode="decimal" /></label>
             <label>Contributor slots<input value={f.slots} onChange={set("slots")} inputMode="numeric" /></label>
             <label>Hours to deliver after claiming<input value={f.hours} onChange={set("hours")} inputMode="numeric" /></label>
@@ -833,6 +806,7 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
           <div className="row">
             <button disabled={!account || !spec.title} onClick={propose}>Propose bounty</button>
             {!account && <span className="muted small">Connect a wallet to propose.</span>}
+            {account && manual && <span className="muted small">You ({account}) will be the reviewer.</span>}
           </div>
         </div>
       </details>
@@ -854,7 +828,9 @@ function describe(p: ProposalView): { title: string; sub?: string } {
   if (k.BountyDone) return { title: `Payout claim for bounty ${pad(k.BountyDone.bounty_id)}` };
   if (k.Transfer) return { title: `Transfer ${toNear(k.Transfer.amount)} NEAR`, sub: `to ${k.Transfer.receiver_id}` };
   if (k.ChangePolicy) return { title: "Policy change", sub: p.description };
+  if (k.AddMemberToRole?.role === "verifier") return { title: "Approve verifier enclave", sub: `${k.AddMemberToRole.member_id.slice(0, 12)}…` };
   if (k.AddMemberToRole) return { title: `Add ${k.AddMemberToRole.member_id} to ${k.AddMemberToRole.role}` };
+  if (k.RemoveMemberFromRole) return { title: `Remove ${k.RemoveMemberFromRole.member_id.slice(0, 20)} from ${k.RemoveMemberFromRole.role}` };
   return { title: Object.keys(k)[0], sub: p.description };
 }
 
@@ -874,7 +850,7 @@ function ActivityPanel({ cfg, state, account, isCouncil, needle, query, daoUrl, 
       </header>
       <div className="ledger">
         {rows.map(({ p, d }) => (
-          <ProposalRow key={p.id} p={p} d={d} cfg={cfg} canVote={isCouncil && p.status === "InProgress" && !(account! in p.votes)} verdict={state.verdicts[p.id]} run={run} />
+          <ProposalRow key={p.id} p={p} d={d} cfg={cfg} account={account} canVote={isCouncil && p.status === "InProgress" && !(account! in p.votes)} verdict={state.verdicts[p.id]} run={run} />
         ))}
         {!rows.length && <p className="empty">{needle ? `Nothing matches “${query.trim()}”.` : "No proposals yet."}</p>}
       </div>
@@ -883,7 +859,7 @@ function ActivityPanel({ cfg, state, account, isCouncil, needle, query, daoUrl, 
 }
 
 /** One line per proposal with number, title, score and status. Details (who, when, votes, AI verdict) open on click. */
-function ProposalRow({ p, d, cfg, canVote, verdict, run }: { p: ProposalView; d: { title: string; sub?: string }; cfg: Config; canVote: boolean; verdict?: Verdict; run: RunFn }) {
+function ProposalRow({ p, d, cfg, account, canVote, verdict, run }: { p: ProposalView; d: { title: string; sub?: string }; cfg: Config; account: string | null; canVote: boolean; verdict?: Verdict; run: RunFn }) {
   const [open, setOpen] = useState(false);
   const isPayout = !!bountyDone(p);
   const voteAs = (action: "VoteApprove" | "VoteReject") =>
@@ -900,7 +876,7 @@ function ProposalRow({ p, d, cfg, canVote, verdict, run }: { p: ProposalView; d:
             </span>
           )}
         </span>
-        <span className={`status s-${p.status}`}>{p.status === "InProgress" ? (isPayout ? "Verifying" : "Voting") : p.status}</span>
+        <span className={`status s-${p.status}`}>{p.status === "InProgress" ? (isPayout ? (verdict?.decision === "review" ? "In review" : "Verifying") : "Voting") : p.status}</span>
         <ChevronDown className="entry-chev" size={16} strokeWidth={1.75} aria-hidden />
       </button>
       {canVote && (
@@ -924,75 +900,15 @@ function ProposalRow({ p, d, cfg, canVote, verdict, run }: { p: ProposalView; d:
             <div className="votes">
               {Object.entries(p.votes).map(([a, v]) => (
                 <span key={a}>
-                  {a === cfg.verifier ? "AI verifier" : a} voted <b>{v}</b>
+                  {a === cfg.verifier ? "Verifier enclave" : a} voted <b>{v}</b>
                 </span>
               ))}
             </div>
           )}
-          {verdict && <VerdictView v={verdict} cfg={cfg} />}
+          {verdict && <VerdictView v={verdict} cfg={cfg} account={account} />}
         </div>
       )}
     </article>
-  );
-}
-
-function VerdictView({ v, cfg }: { v: Verdict; cfg: Config }) {
-  return (
-    <div className="verdict">
-      <div className="verdict-head">
-        <span className={`score big-score ${v.decision}`}>{v.score}</span>
-        <div>
-          <strong>{v.decision === "approve" ? "Approve payout" : "Reject"}</strong>
-          <div className="muted small num">
-            {v.rows} rows, sha256 {v.sha256.slice(0, 12)}…, structural {v.structuralScore}
-            {v.ai && `, label agreement ${Math.round(v.ai.agreement * 100)}%, quality ${v.ai.qualityScore}`}
-          </div>
-        </div>
-      </div>
-      <ul className="checks">
-        {v.checks.map((c) => (
-          <li key={c.name} className={c.ok ? "ok" : "bad"}>
-            {c.ok ? <Check size={16} aria-label="passed" /> : <X size={16} aria-label="failed" />} <b>{c.name}</b> <span className="muted">{c.detail}</span>
-          </li>
-        ))}
-      </ul>
-      {v.ai && (
-        <div className="ai">
-          <p>
-            <b>AI review</b> <span className="muted small">({v.ai.model}, {v.ai.sampled} rows sampled blind{v.ai.completionId ? `, id ${v.ai.completionId}` : ""})</span>
-          </p>
-          <p>{v.ai.summary}</p>
-          <table>
-            <thead>
-              <tr><th>Row</th><th>Text</th><th>Submitted</th><th>AI</th></tr>
-            </thead>
-            <tbody>
-              {v.ai.judgements.slice(0, 12).map((j) => (
-                <tr key={j.row} className={j.agrees ? "" : "disagree"}>
-                  <td className="num">{j.row}</td>
-                  <td title={j.reason}>{j.text}</td>
-                  <td>{j.submittedLabel}</td>
-                  <td>
-                    {j.aiLabel}
-                    {!j.agrees && <TriangleAlert className="inline-icon" size={14} aria-label="disagrees" />}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
-      {v.aiError && <p className="err small">AI review failed ({v.aiError})</p>}
-      <ul className="small reasons">
-        {v.reasons.map((r) => <li key={r}>{r}</li>)}
-      </ul>
-      {v.voteTx && (
-        <a className="small" href={`${cfg.explorer}/txns/${v.voteTx}`} target="_blank" rel="noreferrer">
-          Verifier vote transaction <ExternalLink className="inline-icon" size={14} aria-hidden />
-        </a>
-      )}
-      {v.voteError && <p className="err small">Vote pending ({v.voteError})</p>}
-    </div>
   );
 }
 
@@ -1206,6 +1122,7 @@ function BountyDashboard({ id, cfg, state, account, isCouncil, claim, run }: { i
               p={p}
               d={{ title: bountyDone(p)!.receiver_id, sub: verdict?.rows ? `${verdict.rows} rows` : undefined }}
               cfg={cfg}
+              account={account}
               canVote={isCouncil && p.status === "InProgress" && !(account! in p.votes)}
               verdict={verdict ?? undefined}
               run={run}
@@ -1224,6 +1141,9 @@ function BountyDashboard({ id, cfg, state, account, isCouncil, claim, run }: { i
             <>
               {spec.guidelines && <p className="guidelines">{spec.guidelines}</p>}
               <dl className="brief">
+                <dt>Task</dt><dd>{TASK_INFO[spec.task].name}</dd>
+                <dt>Review</dt><dd>{spec.review === "manual" ? `Requester ${spec.requester || "(not set)"} reviews ${spec.sampleSize} random rows plus AI-flagged rows within ${spec.reviewHours} h, then auto review decides` : "Automatic, inside the enclave"}</dd>
+                <dt>AI agreement needed</dt><dd className="num">{Math.round(spec.minAgreement * 100)}%</dd>
                 <dt>Format</dt><dd>{spec.format.toUpperCase()}</dd>
                 <dt>Minimum rows</dt><dd className="num">{spec.minRows}</dd>
                 {hours !== undefined && (<><dt>Time to deliver</dt><dd className="num">{hours} h after claiming</dd></>)}
