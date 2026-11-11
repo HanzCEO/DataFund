@@ -24,7 +24,7 @@ export function startWatcher() {
       for (const p of proposals) {
         if (!bountyDone(p) || inFlight.has(p.id)) continue;
         const v = getVerdict(p.id);
-        const job = p.status === "InProgress" ? (v?.voteTx ? undefined : handle(p)) : p.status === "Approved" && v?.encrypted && !v.releasedKey ? release(p, v) : undefined;
+        const job = p.status === "InProgress" ? (v?.voteTx ? undefined : handle(p)) : p.status === "Approved" && v?.encrypted && !v.released ? release(p, v) : undefined;
         if (!job) continue;
         inFlight.add(p.id);
         job.finally(() => inFlight.delete(p.id));
@@ -64,9 +64,13 @@ async function handle(p: ProposalView) {
         }
       }
 
+      // The requester only counts when they really proposed this bounty. Checked once, here.
+      const needsRequester = verdict.decision === "review" || spec.access === "requester";
+      const requester = needsRequester ? await verifiedRequester(bounty, spec.requester) : undefined;
+      verdict.access = spec.access;
+      if (spec.access === "requester") verdict.releaseTo = requester;
       if (verdict.decision === "review") {
         const deadline = new Date(Number(BigInt(p.submission_time) / 1_000_000n) + spec.reviewHours * 3_600_000).toISOString();
-        const requester = await verifiedRequester(bounty, spec.requester);
         verdict.review = { requester, deadline, sampleRows: r.details.sample.length };
         if (!requester) fallback(verdict, "the bounty has no verified requester");
       }
@@ -109,13 +113,22 @@ function fallback(v: Verdict, why: string) {
   v.reasons.push(`Auto review decided because ${why}`);
 }
 
-/** Publish the file key once two RPC providers agree the payout was approved. The dataset becomes public. */
+/**
+ * Once two RPC providers agree the payout was approved, release the key. Public bounties publish it and the
+ * dataset becomes public. Requester-only bounties keep it in the enclave and hand it to the requester on a signed
+ * request (see /key).
+ */
 async function release(p: ProposalView, v: Verdict) {
   try {
     if ((await confirmedStatus(p.id)) !== "Approved") return;
-    v.releasedKey = toB64(await fileKeyOf(parseSubmission(p.description)));
+    if (v.access === "requester") {
+      if (!v.releaseTo) v.reasons.push("No verified requester. The key stays sealed in the enclave");
+    } else {
+      v.releasedKey = toB64(await fileKeyOf(parseSubmission(p.description)));
+    }
+    v.released = true;
     putVerdict(v);
-    console.log(`[watcher] #${p.id} payout approved, key released`);
+    console.log(`[watcher] #${p.id} payout approved, key released ${v.access === "requester" ? `to ${v.releaseTo ?? "nobody"}` : "publicly"}`);
   } catch (e) {
     console.warn(`[watcher] #${p.id} release postponed (${(e as Error).message})`);
   }

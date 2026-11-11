@@ -189,7 +189,7 @@ export function SubmitPanel({ b, spec, cfg, state, run }: { b: Bounty; spec: Spe
       <p className="small muted lock-note">
         <Lock size={14} className="inline-icon" aria-hidden /> Your file is encrypted in this browser. Only the verifier enclave can read it,
         {spec.review === "manual" ? ` and the requester sees at most ${spec.sampleSize} random rows plus rows the AI flags (never over 20%).` : " and nobody else sees a row."}{" "}
-        The DAO gets the key once you're paid.
+        {spec.access === "requester" ? "Once you're paid, only the requester gets the key." : "The key is published once you're paid."}
       </p>
       {att && !approved && <p className="small err">This enclave is not approved by the DAO. Its votes won't count until the council adds it to the verifier role.</p>}
       <textarea
@@ -305,7 +305,7 @@ export function VerdictView({ v, cfg, details, account, precheck }: { v: Verdict
         {v.reasons.map((r) => <li key={r}>{r}</li>)}
       </ul>
       {!precheck && v.proposalId !== undefined && account && <ReviewPanel v={v} cfg={cfg} account={account} />}
-      {v.releasedKey && <DownloadDataset v={v} />}
+      {(v.releasedKey || (v.released && v.access === "requester")) && <DownloadDataset v={v} cfg={cfg} account={account} />}
       {v.voteTx && (
         <a className="small" href={`${cfg.explorer}/txns/${v.voteTx}`} target="_blank" rel="noreferrer">
           Verifier vote transaction <ExternalLink className="inline-icon" size={14} aria-hidden />
@@ -434,14 +434,29 @@ function ReviewPanel({ v, cfg, account }: { v: Verdict; cfg: Config; account: st
   );
 }
 
-/** After payout the key is public. Fetch the encrypted file, decrypt it here and check its hash. */
-function DownloadDataset({ v }: { v: Verdict }) {
+/**
+ * After payout. Public bounties publish the key. Requester-only bounties hand it to the requester, sealed to this
+ * page, after a wallet signature. Either way the page fetches the encrypted file, decrypts it here and checks its hash.
+ */
+function DownloadDataset({ v, cfg, account }: { v: Verdict; cfg: Config; account?: string | null }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const privateFile = !v.releasedKey;
+  const mine = !privateFile || (!!account && account === v.releaseTo);
+
+  const keyOf = async (): Promise<Uint8Array> => {
+    if (v.releasedKey) return fromB64(v.releasedKey);
+    const request = await signReview(cfg.daoId, { app: "datafund", dao: cfg.daoId, action: "key", proposalId: v.proposalId!, ts: Date.now() });
+    const reply = x25519Keypair();
+    const r = await api<{ sealed: string }>("/api/enclave/key", { request, replyKey: toB64(reply.publicKey) });
+    return fromB64((await openJson<{ key: string }>(reply.secret, r.sealed)).key);
+  };
+
   const get = async () => {
     setBusy(true);
     setErr("");
     try {
+      const key = await keyOf();
       const urls = v.cid ? GATEWAYS.map((g) => `${g}/ipfs/${v.cid}`) : [v.url.replace(/^ipfs:\/\//, `${GATEWAYS[0]}/ipfs/`)];
       let blob: Uint8Array | undefined;
       for (const u of urls) {
@@ -456,7 +471,7 @@ function DownloadDataset({ v }: { v: Verdict }) {
         }
       }
       if (!blob) throw new Error("No gateway returned the file");
-      const plain = await decryptFile(fromB64(v.releasedKey!), blob);
+      const plain = await decryptFile(key, blob);
       if ((await sha256Hex(plain)) !== v.sha256) throw new Error("Decrypted file doesn't match the committed hash");
       saveFile(new Blob([fromUtf8(plain)], { type: "text/plain" }), `datafund-${v.proposalId}-${v.sha256.slice(0, 8)}.jsonl`);
     } catch (e) {
@@ -464,12 +479,18 @@ function DownloadDataset({ v }: { v: Verdict }) {
     }
     setBusy(false);
   };
+  if (!mine)
+    return (
+      <p className="small muted">
+        <Lock size={14} className="inline-icon" aria-hidden /> Paid out. Only the requester{v.releaseTo ? ` (${v.releaseTo})` : ""} can download this dataset.
+      </p>
+    );
   return (
     <div className="row">
       <button className="ghost" disabled={busy} onClick={get}>
         <Download size={16} aria-hidden /> {busy ? "Decrypting…" : "Download dataset"}
       </button>
-      <span className="small muted">Paid out. The enclave released the key.</span>
+      <span className="small muted">{privateFile ? "Paid out. You sign once and the enclave hands the key to this page only." : "Paid out. The enclave released the key."}</span>
       {err && <span className="err small">{err}</span>}
     </div>
   );

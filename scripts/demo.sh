@@ -4,7 +4,7 @@
 #
 #   scripts/demo.sh chip-in   <account> <near>
 #   scripts/demo.sh propose   <account> <title> <labels a|b> <reward-near> [slots] [min-rows]
-#                             TASK=qa|preference and REVIEW=manual pick another task type or manual review
+#                             TASK=qa|preference, REVIEW=manual and ACCESS=requester change the task type, review and access
 #   scripts/demo.sh approve   <council-account> <proposal-id>
 #   scripts/demo.sh reject    <council-account> <proposal-id>
 #   scripts/demo.sh claim     <account> <bounty-id>
@@ -35,10 +35,10 @@ case "$cmd" in
   propose)
     args=$(json 'import json,sys,os
 t,labels,reward=sys.argv[1:4]; slots=int(sys.argv[4]); minrows=int(sys.argv[5]); requester=sys.argv[6]
-task=os.environ.get("TASK","classification"); review=os.environ.get("REVIEW","auto")
+task=os.environ.get("TASK","classification"); review=os.environ.get("REVIEW","auto"); access=os.environ.get("ACCESS","public")
 fields={"qa":{"question":"string","answer":"string"},
         "preference":{"prompt":"string","response_a":"string","response_b":"string","preferred":"a|b"}}.get(task,{"text":"string","label":labels})
-spec={"title":t,"format":"jsonl","fields":fields,"minRows":minrows,"task":task,"review":review,"requester":requester,
+spec={"title":t,"format":"jsonl","fields":fields,"minRows":minrows,"task":task,"review":review,"access":access,"requester":requester,
       "guidelines":"Realistic examples, no real personal data, roughly balanced answers."}
 yocto=str(int(round(float(reward)*1000))*10**21)
 print(json.dumps({"proposal":{"description":"New dataset bounty "+t,"kind":{"AddBounty":{"bounty":{

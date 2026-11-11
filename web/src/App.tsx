@@ -23,7 +23,7 @@ import {
   Wallet,
   X,
 } from "lucide-react";
-import type { BountyClaim, DatasetSpec, ProposalView, ReviewMode, TaskType, Verdict } from "../../shared/types";
+import type { Access, BountyClaim, DatasetSpec, ProposalView, ReviewMode, TaskType, Verdict } from "../../shared/types";
 import { labelsOf, MANUAL_MIN_ROWS, MAX_REVIEW_HOURS, MIN_SAMPLE, TASK_FIELDS, TASK_INFO } from "../../shared/spec";
 import { api, type Bounty, type Config, type RunFn, type State } from "./api";
 import { EnclavePanel, SubmitPanel, VerdictView } from "./submission";
@@ -393,7 +393,7 @@ function HowVerified({ cfg }: { cfg: Config }) {
           </li>
           <li>
             <b>Release</b>
-            <span>Once two RPC providers confirm the payout, the enclave publishes the key and the dataset becomes public.</span>
+            <span>Once two RPC providers confirm the payout, the enclave releases the key. Public bounties publish it. Requester-only bounties hand it to the requester alone.</span>
           </li>
         </ol>
       )}
@@ -586,6 +586,7 @@ function briefLine(b: Bounty) {
     b.spec && `${b.spec.minRows}+ rows`,
     b.spec?.task === "classification" && labels.length && labels.join(" / "),
     b.spec?.review === "manual" && "reviewed by requester",
+    b.spec?.access === "requester" && "private to requester",
     `${hours} h to deliver`,
   ].filter(Boolean).join(", ");
 }
@@ -696,7 +697,7 @@ const bountyDone = (p: ProposalView) => (typeof p.kind === "object" ? (p.kind.Bo
 
 function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Config; state: State; account: string | null; run: RunFn; open: boolean; setOpen: (v: boolean) => void }) {
   const [f, setF] = useState({
-    title: "", guidelines: "", format: "jsonl", task: "classification" as TaskType, review: "auto" as ReviewMode,
+    title: "", guidelines: "", format: "jsonl", task: "classification" as TaskType, review: "auto" as ReviewMode, access: "public" as Access,
     textField: "text", labelField: "label", labels: "positive, negative", minAgreement: "",
     minRows: "20", sampleSize: String(MIN_SAMPLE), reviewHours: "48", reward: "1", slots: "3", hours: "48",
   });
@@ -716,6 +717,7 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
       guidelines: f.guidelines.trim(),
       task: f.task,
       review: f.review,
+      access: f.access,
       requester: account ?? "",
       minAgreement: (Number(f.minAgreement) || Math.round(TASK_INFO[f.task].minAgreement * 100)) / 100,
       ...(manual ? { sampleSize: Math.max(MIN_SAMPLE, Number(f.sampleSize) || MIN_SAMPLE), reviewHours: Math.min(MAX_REVIEW_HOURS, Math.max(1, Number(f.reviewHours) || 48)) } : {}),
@@ -786,6 +788,12 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
                 <option value="manual">Manual (I review a sample)</option>
               </select>
             </label>
+            <label>Who gets the data
+              <select value={f.access} onChange={set("access")}>
+                <option value="public">Everyone, after payout</option>
+                <option value="requester">Only me (requester)</option>
+              </select>
+            </label>
             <label>AI agreement needed (%)<input value={f.minAgreement} onChange={set("minAgreement")} inputMode="numeric" placeholder={String(Math.round(TASK_INFO[f.task].minAgreement * 100))} /></label>
             <label>Min rows<input value={f.minRows} onChange={set("minRows")} inputMode="numeric" /></label>
             {manual && (
@@ -806,7 +814,11 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
           <div className="row">
             <button disabled={!account || !spec.title} onClick={propose}>Propose bounty</button>
             {!account && <span className="muted small">Connect a wallet to propose.</span>}
-            {account && manual && <span className="muted small">You ({account}) will be the reviewer.</span>}
+            {account && (manual || f.access === "requester") && (
+              <span className="muted small">
+                You ({account}) will be the {manual && f.access === "requester" ? "reviewer and the only one who can download the data" : manual ? "reviewer" : "only one who can download the data"}.
+              </span>
+            )}
           </div>
         </div>
       </details>
@@ -1143,6 +1155,7 @@ function BountyDashboard({ id, cfg, state, account, isCouncil, claim, run }: { i
               <dl className="brief">
                 <dt>Task</dt><dd>{TASK_INFO[spec.task].name}</dd>
                 <dt>Review</dt><dd>{spec.review === "manual" ? `Requester ${spec.requester || "(not set)"} reviews ${spec.sampleSize} random rows plus AI-flagged rows within ${spec.reviewHours} h, then auto review decides` : "Automatic, inside the enclave"}</dd>
+                <dt>Access</dt><dd>{spec.access === "requester" ? `Only ${spec.requester || "the requester"} can download the data after payout` : "Public after payout"}</dd>
                 <dt>AI agreement needed</dt><dd className="num">{Math.round(spec.minAgreement * 100)}%</dd>
                 <dt>Format</dt><dd>{spec.format.toUpperCase()}</dd>
                 <dt>Minimum rows</dt><dd className="num">{spec.minRows}</dd>

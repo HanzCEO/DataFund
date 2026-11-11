@@ -8,6 +8,9 @@
  */
 export type TaskType = "classification" | "qa" | "preference";
 
+/** Who can get the file key after payout. public publishes it. requester hands it only to the bounty's requester. */
+export type Access = "public" | "requester";
+
 /** auto lets the enclave decide. manual lets the bounty's requester decide on a sample, with auto as the fallback. */
 export type ReviewMode = "auto" | "manual";
 
@@ -29,6 +32,8 @@ export interface DatasetSpec {
   sampleSize?: number;
   /** Hours the requester has to decide before auto review takes over. */
   reviewHours?: number;
+  /** Who can decrypt the dataset after payout. Defaults to public. */
+  access?: Access;
 }
 
 /** JSON stored in the bounty_done proposal description. */
@@ -136,7 +141,13 @@ export interface Verdict {
   };
   /** Auto review's own decision, kept when a manual review overrides it. */
   autoDecision?: "approve" | "reject";
-  /** File key (base64), published once the payout is approved. */
+  /** Who can get the file key after payout. */
+  access?: Access;
+  /** The payout was confirmed and the key is available (to everyone, or to `releaseTo` only). */
+  released?: boolean;
+  /** Requester-only bounties. The verified requester who may fetch the key. */
+  releaseTo?: string;
+  /** File key (base64), published once the payout is approved. Public bounties only. */
   releasedKey?: string;
   voteTx?: string;
   voteError?: string;
@@ -183,7 +194,7 @@ export interface SignedRequest {
 export interface ReviewMessage {
   app: "datafund";
   dao: string;
-  action: "view" | "approve" | "reject";
+  action: "view" | "approve" | "reject" | "key";
   proposalId: number;
   /** ms since epoch */
   ts: number;

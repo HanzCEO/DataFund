@@ -1,16 +1,16 @@
 // The enclave service. Runs inside a Phala dstack CVM (Intel TDX). It alone can decrypt submissions and vote as the verifier.
 import { serve } from "@hono/node-server";
 import { Hono } from "hono";
-import { fromB64, sealJson } from "../shared/crypto.js";
+import { fromB64, sealJson, toB64 } from "../shared/crypto.js";
 import { parseSpec } from "../shared/spec.js";
 import type { SignedRequest, VerdictDetails } from "../shared/types.js";
-import { balance, getBounty } from "./chain.js";
+import { balance, getBounty, getProposal } from "./chain.js";
 import { DAO_ID, MAX_BYTES, MIN_SCORE, NEAR_AI_MODEL, NETWORK, PORT } from "./config.js";
 import { attestation, initKeys } from "./keys.js";
 import { verifySigned } from "./nep413.js";
 import { pinningEnabled, signedUploadUrl } from "./storage.js";
 import { allVerdicts, getDetails, getVerdict, putVerdict } from "./store.js";
-import { aiEnabled, allowsPlaintext, verify } from "./verifier.js";
+import { aiEnabled, allowsPlaintext, fileKeyOf, parseSubmission, verify } from "./verifier.js";
 import { startWatcher } from "./watcher.js";
 
 const keys = await initKeys();
@@ -105,6 +105,22 @@ app.post("/review/decide", async (c) => {
   v.reasons.push(`Requester ${request.accountId} chose to ${m.action} after reviewing ${v.review.sampleRows} rows`);
   putVerdict(v);
   return c.json(v);
+});
+
+/**
+ * The file key of a paid submission, sealed to the caller's one-time key. For requester-only bounties only the
+ * verified requester gets it. Public bounties publish the key in the verdict, and this works for anyone.
+ */
+app.post("/key", async (c) => {
+  const body = await c.req.json<{ request: SignedRequest; replyKey: string }>();
+  const reply = replyKeyOf(body.replyKey);
+  const m = await verifySigned(body.request);
+  if (m.action !== "key") throw new Error("Expected a key request");
+  const v = getVerdict(m.proposalId);
+  if (!v?.released) throw new Error("This submission has not been paid out yet");
+  if (v.access === "requester" && body.request.accountId !== v.releaseTo) throw new Error("Only the bounty's requester can download this dataset");
+  const key = toB64(await fileKeyOf(parseSubmission((await getProposal(m.proposalId)).description)));
+  return c.json({ sealed: await sealJson(reply, { key }) });
 });
 
 serve({ fetch: app.fetch, port: PORT }, () => console.log(`[enclave] :${PORT} as ${keys.accountId} (${keys.mode}), DAO ${DAO_ID}`));

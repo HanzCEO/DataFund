@@ -48,6 +48,14 @@ DAO ──payout on approval──▶ Contributor
     the file (manual bounties need 500+ rows). They approve or reject with a free NEP-413 wallet signature, and the
     enclave casts the vote. If they don't decide within the review window (default 48 h), auto review decides.
     Hard rule failures (bad hash, personal data, prompt injection, wrong schema) are rejected at once in both modes.
+- **Access after payout.** The requester picks one per bounty.
+  - **Public** (default). The enclave publishes the file key and anyone can download and decrypt the dataset.
+    This fits bounties paid from the community treasury.
+  - **Requester only.** The key stays in the enclave. The verified requester signs a free wallet message and the
+    enclave returns the key sealed to that page. Nobody else can decrypt the file on IPFS. This controls who gets
+    the data from the enclave, not what they do with it afterwards, and the contributor still has their own copy.
+    The council should expect the requester to fund such a bounty, since treasury money would otherwise buy
+    private data.
 - **Why junk can't hide.** Files up to 2,000 rows have every row redone by the AI, not a sample. Bigger files get
   500 random rows. The sample is seeded by a block hash that didn't exist when the file was committed, and anyone
   can rerun the sampler with the block height in the verdict. A contributor can't place good rows where checks will
@@ -62,7 +70,7 @@ DAO ──payout on approval──▶ Contributor
 - **Nobody can take the data without paying.** The requester only ever sees the sample. Private answers from the
   enclave (precheck results, review samples, AI notes) are sealed to a one-time key held by the page that asked, so
   the public server relaying them sees only ciphertext. The key is published only after two RPC providers confirm
-  the payout was approved. Rejected files stay encrypted.
+  the payout was approved, and only the requester gets it on requester-only bounties. Rejected files stay encrypted.
 - **No file hosting.** Contributors upload the encrypted file straight to IPFS with a short-lived Pinata URL signed
   by the enclave, or host it anywhere themselves. The enclave pins each submission to the DAO's Pinata account so it
   stays available after payout.
@@ -132,7 +140,8 @@ skipped for 30 seconds. Set `NEAR_RPC_URLS` (comma-separated) to use your own li
      the sample (rows the AI flagged are marked). **Approve payout** or **Reject** is another signature, and the
      enclave votes. Try the **facade** sample. Its first 420 rows are honest and the last 180 have flipped labels.
 6. Once the payout is approved, the claim shows **Download dataset**. The page fetches the encrypted file from IPFS,
-   decrypts it with the released key and checks its hash.
+   decrypts it with the released key and checks its hash. On a requester-only bounty only the requester sees the
+   button, and it asks for one wallet signature first.
 7. Click a bounty's cover or **Bounty dashboard** to see its reward, slots, participants and every verdict.
 
 ### From the terminal (no browser wallet needed)
@@ -143,6 +152,7 @@ skipped for 30 seconds. Set `NEAR_RPC_URLS` (comma-separated) to use your own li
 scripts/demo.sh chip-in  you.testnet 2
 scripts/demo.sh propose  you.testnet "Scam vs legit SMS" "scam|legit" 1    # prints proposal id
 TASK=qa REVIEW=manual scripts/demo.sh propose you.testnet "Arithmetic QA" - 1 3 500
+ACCESS=requester scripts/demo.sh propose you.testnet "Private SMS set" "scam|legit" 1
 scripts/demo.sh approve  you.testnet <proposal-id>                           # each council member votes
 scripts/demo.sh claim    you.testnet <bounty-id>
 scripts/demo.sh submit   you.testnet <bounty-id> web/public/examples/sms-scam-good.jsonl
@@ -171,7 +181,8 @@ These runs were verified on testnet with the earlier single-server verifier.
   it. The terminal scripts don't depend on the page.
 - **Model calls leave our enclave for NEAR AI's.** Both run in TEEs. Checking NEAR AI's attestation from inside the
   enclave before sending rows is not done yet.
-- **Release is final.** Once the key is published the dataset is public. There's no requester-only release yet.
+- **Release is final.** Once a public key is published, or a requester downloads a private dataset, it can't be
+  taken back.
 - **Manual review needs the requester to have proposed the bounty.** The enclave only accepts a reviewer named in
   the spec who also proposed the approved `AddBounty`. Otherwise auto review decides.
 - **Proposal period.** This DAO's proposals expire after 72 h. The review window is capped at 60 h to stay inside that.

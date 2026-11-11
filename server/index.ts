@@ -124,7 +124,7 @@ app.get("/api/bounties/:id", async (c) => {
  * Relay to the enclave. Everything private in these calls is encrypted end to end between the browser and the
  * enclave (sealed file keys in, sealed answers out). Relaying here reveals nothing.
  */
-const RELAY = new Set(["attestation", "status", "upload-url", "precheck", "review", "review/decide"]);
+const RELAY = new Set(["attestation", "status", "upload-url", "precheck", "review", "review/decide", "key"]);
 app.all("/api/enclave/*", async (c) => {
   const path = c.req.path.slice("/api/enclave/".length);
   if (!RELAY.has(path)) return c.notFound();
