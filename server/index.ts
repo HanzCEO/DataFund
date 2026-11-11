@@ -5,8 +5,8 @@ import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { DAO_ID, EXPLORER, MIN_SCORE, NEAR_AI_MODEL, NETWORK, PORT, PUBLIC_URL, VERIFIER_ACCOUNT } from "./config.js";
 import { MAX_BYTES, sha256 } from "./dataset.js";
-import { getBounties, getRecentProposals, provider, view } from "./near.js";
-import { allVerdicts, uploadPath } from "./store.js";
+import { getAllProposals, getBounties, getClaims, getRecentProposals, provider, view } from "./near.js";
+import { allVerdicts, knownAccounts, rememberAccount, uploadPath } from "./store.js";
 import { aiEnabled, parseSpec, verify } from "./verifier.js";
 import { startWatcher } from "./watcher.js";
 
@@ -44,9 +44,58 @@ app.get("/api/state", async (c) => {
   return c.json(body);
 });
 
-app.get("/api/claims/:account", async (c) =>
-  c.json((await view("get_bounty_claims", { account_id: c.req.param("account") })) ?? []),
-);
+const ACCOUNT_RE = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
+
+app.get("/api/claims/:account", async (c) => {
+  const account = c.req.param("account");
+  if (!ACCOUNT_RE.test(account) || account.length > 64) throw new Error("Invalid account id");
+  const claims = await getClaims(account);
+  rememberAccount(account);
+  return c.json(claims);
+});
+
+/**
+ * One bounty with its participants. The contract only answers "what did account X claim". This endpoint asks that
+ * for every account the app has seen (connected wallets, proposers, payout receivers and the council).
+ */
+const bountyCache = new Map<number, { at: number; body: unknown }>();
+app.get("/api/bounties/:id", async (c) => {
+  const id = Number(c.req.param("id"));
+  if (!Number.isInteger(id) || id < 0) throw new Error("Invalid bounty id");
+  const hit = bountyCache.get(id);
+  if (hit && Date.now() - hit.at < 8000) return c.json(hit.body as object);
+
+  const [bounties, proposals, policy] = await Promise.all([getBounties(), getAllProposals(), view<any>("get_policy")]);
+  const bounty = bounties.find((b) => b.id === id);
+  const submissions = proposals.filter((p) => typeof p.kind === "object" && p.kind.BountyDone?.bounty_id === id);
+  if (!bounty && !submissions.length) return c.json({ error: "Bounty not found" }, 404);
+
+  const council: string[] = policy.roles.find((r: any) => r.name === "council")?.kind?.Group ?? [];
+  const candidates = new Set<string>([
+    ...knownAccounts(),
+    ...council,
+    ...proposals.map((p) => p.proposer),
+    ...submissions.map((p) => (p.kind as any).BountyDone.receiver_id as string),
+  ]);
+  const claims = (
+    await Promise.all(
+      [...candidates].map(async (account) => {
+        const mine = await getClaims(account).catch(() => []);
+        return mine.filter((cl) => cl.bounty_id === id).map((cl) => ({ account, ...cl }));
+      }),
+    )
+  ).flat();
+
+  const verdicts = allVerdicts();
+  const body = {
+    bounty: bounty ? { ...bounty, claims: await view<number>("get_bounty_number_of_claims", { id }), spec: safe(() => parseSpec(bounty.description)) } : null,
+    claims,
+    submissions: submissions.reverse().map((p) => ({ proposal: p, verdict: verdicts[p.id] ?? null })),
+    checkedAccounts: candidates.size,
+  };
+  bountyCache.set(id, { at: Date.now(), body });
+  return c.json(body);
+});
 
 /** Simple off-chain storage for contributors without their own hosting. Files are content-addressed. */
 app.post("/api/upload", async (c) => {

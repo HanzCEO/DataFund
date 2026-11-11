@@ -17,6 +17,13 @@ export async function getRecentProposals(limit = 60): Promise<ProposalView[]> {
   return getProposals(Math.max(0, last - limit), limit);
 }
 
+/** Every proposal, oldest first. The bounty dashboard needs the full payout history, not just recent proposals. */
+export async function getAllProposals(): Promise<ProposalView[]> {
+  const last = (await view<number>("get_last_proposal_id")) ?? 0;
+  const pages = await Promise.all(Array.from({ length: Math.ceil(last / 100) }, (_, i) => getProposals(i * 100, 100)));
+  return pages.flat();
+}
+
 export async function getBounties(): Promise<BountyView[]> {
   return (await view<BountyView[]>("get_bounties", { from_index: 0, limit: 100 })) ?? [];
 }

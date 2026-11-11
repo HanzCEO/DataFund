@@ -9,8 +9,8 @@ mkdirSync(UPLOADS, { recursive: true });
 
 export const uploadPath = (name: string) => join(UPLOADS, name);
 
-type Db = { verdicts: Record<string, Verdict>; attempts: Record<string, number> };
-let db: Db = { verdicts: {}, attempts: {} };
+type Db = { verdicts: Record<string, Verdict>; attempts: Record<string, number>; accounts: string[] };
+let db: Db = { verdicts: {}, attempts: {}, accounts: [] };
 try {
   db = { ...db, ...JSON.parse(readFileSync(FILE, "utf8")) };
 } catch {
@@ -32,4 +32,15 @@ export function bumpAttempt(proposalId: number): number {
   db.attempts[proposalId] = (db.attempts[proposalId] ?? 0) + 1;
   save();
   return db.attempts[proposalId];
+}
+
+/**
+ * Accounts that connected a wallet to this app. The DAO contract keys claims by account and can't list who
+ * claimed a bounty. The bounty dashboard checks these accounts, among others, to find participants.
+ */
+export const knownAccounts = () => db.accounts;
+export function rememberAccount(accountId: string) {
+  if (db.accounts.includes(accountId)) return;
+  db.accounts.push(accountId);
+  save();
 }
