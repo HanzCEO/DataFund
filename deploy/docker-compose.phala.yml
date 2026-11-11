@@ -1,0 +1,24 @@
+# Phala Cloud (dstack) deployment of the verifier enclave.
+# Secrets (NEAR_AI_API_KEY, PINATA_JWT) are set as encrypted env vars in Phala. Only the CVM can decrypt them.
+# Use an image digest, not a tag. The compose file is hashed into the attestation, and a digest makes it reproducible.
+services:
+  enclave:
+    image: ${ENCLAVE_IMAGE:?set ENCLAVE_IMAGE to registry/name@sha256:...}
+    restart: always
+    ports:
+      - "8788:8788"
+    volumes:
+      # dstack guest agent. Key derivation and TDX quotes come from here.
+      - /var/run/dstack.sock:/var/run/dstack.sock
+      - enclave-data:/data
+    environment:
+      - NEAR_NETWORK=testnet
+      - DAO_ID=${DAO_ID}
+      - NEAR_AI_API_KEY=${NEAR_AI_API_KEY}
+      - NEAR_AI_MODEL=z-ai/glm-5.3-flash
+      - PINATA_JWT=${PINATA_JWT}
+      - PINATA_GATEWAY=${PINATA_GATEWAY}
+      - MIN_SCORE=70
+      - AUTO_VOTE=true
+volumes:
+  enclave-data:

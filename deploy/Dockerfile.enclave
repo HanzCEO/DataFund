@@ -1,0 +1,12 @@
+# The verifier enclave image. Its hash ends up in the dstack compose hash that the TDX quote attests to.
+# Pin the base image by digest before deploying (docker buildx imagetools inspect node:24-slim).
+FROM node:24-slim
+WORKDIR /app
+COPY package.json package-lock.json ./
+RUN npm ci --ignore-scripts && npm cache clean --force
+COPY tsconfig.json ./
+COPY shared ./shared
+COPY enclave ./enclave
+ENV NODE_ENV=production ENCLAVE_DATA_DIR=/data
+EXPOSE 8788
+CMD ["npx", "tsx", "enclave/index.ts"]
