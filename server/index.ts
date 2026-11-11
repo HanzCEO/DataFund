@@ -1,44 +1,67 @@
+// The public server. Chain reads, the web UI and a relay to the enclave. It holds no keys and no datasets.
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
-import { DAO_ID, EXPLORER, MIN_SCORE, NEAR_AI_MODEL, NETWORK, PORT, PUBLIC_URL, VERIFIER_ACCOUNT } from "./config.js";
-import { MAX_BYTES, sha256 } from "./dataset.js";
+import { parseSpec } from "../shared/spec.js";
+import type { Verdict } from "../shared/types.js";
+import { DAO_ID, ENCLAVE_URL, EXPLORER, NETWORK, PORT, PUBLIC_URL } from "./config.js";
 import { getAllProposals, getBounties, getClaims, getRecentProposals, provider, view } from "./near.js";
-import { allVerdicts, knownAccounts, rememberAccount, uploadPath } from "./store.js";
-import { aiEnabled, parseSpec, verify } from "./verifier.js";
-import { startWatcher } from "./watcher.js";
+import { knownAccounts, rememberAccount } from "./store.js";
 
 const app = new Hono();
 
 app.onError((e, c) => c.json({ error: e.message }, 400));
 
-app.get("/api/config", (c) =>
-  c.json({ daoId: DAO_ID, network: NETWORK, explorer: EXPLORER, verifier: VERIFIER_ACCOUNT, aiEnabled: aiEnabled(), model: NEAR_AI_MODEL, minScore: MIN_SCORE }),
-);
+const enclave = async <T>(path: string): Promise<T> => {
+  const res = await fetch(`${ENCLAVE_URL}${path}`, { signal: AbortSignal.timeout(10_000) });
+  if (!res.ok) throw new Error(`Enclave answered HTTP ${res.status}`);
+  return res.json() as Promise<T>;
+};
+
+// Verdicts are public data from the enclave. Cache them so every browser poll doesn't hit it.
+let verdictCache: { at: number; body: Record<string, Verdict> } = { at: 0, body: {} };
+async function verdicts(): Promise<Record<string, Verdict>> {
+  if (Date.now() - verdictCache.at < 3000) return verdictCache.body;
+  try {
+    verdictCache = { at: Date.now(), body: await enclave("/verdicts") };
+  } catch (e) {
+    console.warn(`[server] enclave unreachable (${(e as Error).message})`);
+  }
+  return verdictCache.body;
+}
+
+app.get("/api/config", async (c) => {
+  const s = await enclave<any>("/status").catch(() => null);
+  return c.json({
+    daoId: DAO_ID, network: NETWORK, explorer: EXPLORER, verifier: s?.accountId ?? "", enclaveMode: s?.mode ?? "offline",
+    aiEnabled: Boolean(s?.aiEnabled), model: s?.model ?? "", minScore: s?.minScore ?? 70, pinning: Boolean(s?.pinning), maxBytes: s?.maxBytes ?? 0,
+  });
+});
 
 // Cache chain reads briefly. Every open browser polls this, and public RPCs rate-limit.
 let cached: { at: number; body: unknown } | undefined;
 app.get("/api/state", async (c) => {
   if (cached && Date.now() - cached.at < 4000) return c.json(cached.body as object);
-  const [bounties, proposals, available, policy, account] = await Promise.all([
+  const [bounties, proposals, available, policy, account, v] = await Promise.all([
     getBounties(),
     getRecentProposals(),
     view<string>("get_available_amount"),
     view<any>("get_policy"),
     provider.viewAccount(DAO_ID),
+    verdicts(),
   ]);
   const claims = await Promise.all(bounties.map((b) => view<number>("get_bounty_number_of_claims", { id: b.id })));
   const body = {
     available,
     total: account.amount.toString(),
     council: policy.roles.find((r: any) => r.name === "council")?.kind?.Group ?? [],
+    verifiers: policy.roles.find((r: any) => r.name === "verifier")?.kind?.Group ?? [],
     bountyBond: policy.bounty_bond,
     proposalBond: policy.proposal_bond,
     bounties: bounties.map((b, i) => ({ ...b, claims: claims[i] ?? 0, spec: safe(() => parseSpec(b.description)) })),
     proposals: proposals.reverse(),
-    verdicts: allVerdicts(),
+    verdicts: v,
   };
   cached = { at: Date.now(), body };
   return c.json(body);
@@ -86,52 +109,32 @@ app.get("/api/bounties/:id", async (c) => {
     )
   ).flat();
 
-  const verdicts = allVerdicts();
+  const v = await verdicts();
   const body = {
     bounty: bounty ? { ...bounty, claims: await view<number>("get_bounty_number_of_claims", { id }), spec: safe(() => parseSpec(bounty.description)) } : null,
     claims,
-    submissions: submissions.reverse().map((p) => ({ proposal: p, verdict: verdicts[p.id] ?? null })),
+    submissions: submissions.reverse().map((p) => ({ proposal: p, verdict: v[p.id] ?? null })),
     checkedAccounts: candidates.size,
   };
   bountyCache.set(id, { at: Date.now(), body });
   return c.json(body);
 });
 
-/** Simple off-chain storage for contributors without their own hosting. Files are content-addressed. */
-app.post("/api/upload", async (c) => {
-  const { content, format } = await c.req.json<{ content: string; format: "jsonl" | "csv" }>();
-  if (typeof content !== "string" || !content.trim()) throw new Error("Empty dataset");
-  if (Buffer.byteLength(content) > MAX_BYTES) throw new Error("Dataset larger than 2 MB");
-  if (format !== "jsonl" && format !== "csv") throw new Error("format must be jsonl or csv");
-  const hash = sha256(content);
-  const name = `${hash}.${format}`;
-  if (!existsSync(uploadPath(name))) await writeFile(uploadPath(name), content);
-  return c.json({ url: `${PUBLIC_URL}/api/files/${name}`, sha256: hash });
-});
-
-app.get("/api/files/:name", async (c) => {
-  const name = c.req.param("name");
-  if (!/^[a-f0-9]{64}\.(jsonl|csv)$/.test(name)) return c.notFound();
-  try {
-    return c.body(await readFile(uploadPath(name), "utf8"), 200, { "content-type": "text/plain; charset=utf-8" });
-  } catch {
-    return c.notFound();
-  }
-});
-
-/** Dry-run the verifier before submitting on-chain (no vote). Lightly rate-limited because it can spend AI credits. */
-const hits = new Map<string, number[]>();
-app.post("/api/precheck", async (c) => {
-  const ip = c.req.header("x-forwarded-for") ?? "local";
-  const now = Date.now();
-  const recent = (hits.get(ip) ?? []).filter((t) => now - t < 60_000);
-  if (recent.length >= 6) return c.json({ error: "Too many prechecks, wait a minute" }, 429);
-  hits.set(ip, [...recent, now]);
-
-  const { bountyId, url, sha256: claimed } = await c.req.json<{ bountyId: number; url: string; sha256?: string }>();
-  const bounty = (await getBounties()).find((b) => b.id === Number(bountyId));
-  if (!bounty) throw new Error("Bounty not found");
-  return c.json(await verify(bounty.id, parseSpec(bounty.description), { url, sha256: claimed ?? "" }));
+/**
+ * Relay to the enclave. Everything private in these calls is encrypted end to end between the browser and the
+ * enclave (sealed file keys in, sealed answers out). Relaying here reveals nothing.
+ */
+const RELAY = new Set(["attestation", "status", "upload-url", "precheck", "review", "review/decide"]);
+app.all("/api/enclave/*", async (c) => {
+  const path = c.req.path.slice("/api/enclave/".length);
+  if (!RELAY.has(path)) return c.notFound();
+  const res = await fetch(`${ENCLAVE_URL}/${path}`, {
+    method: c.req.method,
+    headers: { "content-type": "application/json", "x-forwarded-for": c.req.header("x-forwarded-for") ?? "local" },
+    body: c.req.method === "GET" ? undefined : await c.req.text(),
+    signal: AbortSignal.timeout(300_000),
+  });
+  return new Response(res.body, { status: res.status, headers: { "content-type": res.headers.get("content-type") ?? "application/json" } });
 });
 
 if (existsSync("dist")) {
@@ -147,5 +150,4 @@ function safe<T>(f: () => T): T | null {
   }
 }
 
-serve({ fetch: app.fetch, port: PORT }, () => console.log(`[server] ${PUBLIC_URL} (DAO ${DAO_ID} on ${NETWORK})`));
-startWatcher();
+serve({ fetch: app.fetch, port: PORT }, () => console.log(`[server] ${PUBLIC_URL} (DAO ${DAO_ID} on ${NETWORK}, enclave ${ENCLAVE_URL})`));

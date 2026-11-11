@@ -1,46 +1,31 @@
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
-import type { Verdict } from "../shared/types.js";
 
+// The public server keeps no datasets and no verdicts. Those live in the enclave.
 const DATA_DIR = process.env.DATA_DIR ?? "data";
-const UPLOADS = join(DATA_DIR, "uploads");
-const FILE = join(DATA_DIR, "verdicts.json");
-mkdirSync(UPLOADS, { recursive: true });
+const FILE = join(DATA_DIR, "accounts.json");
+mkdirSync(DATA_DIR, { recursive: true });
 
-export const uploadPath = (name: string) => join(UPLOADS, name);
-
-type Db = { verdicts: Record<string, Verdict>; attempts: Record<string, number>; accounts: string[] };
-let db: Db = { verdicts: {}, attempts: {}, accounts: [] };
+let accounts: string[] = [];
 try {
-  db = { ...db, ...JSON.parse(readFileSync(FILE, "utf8")) };
+  accounts = JSON.parse(readFileSync(FILE, "utf8"));
 } catch {
-  // first run
-}
-
-function save() {
-  writeFileSync(FILE + ".tmp", JSON.stringify(db, null, 2));
-  renameSync(FILE + ".tmp", FILE);
-}
-
-export const getVerdict = (proposalId: number) => db.verdicts[proposalId];
-export const allVerdicts = () => db.verdicts;
-export function putVerdict(v: Verdict) {
-  db.verdicts[v.proposalId!] = v;
-  save();
-}
-export function bumpAttempt(proposalId: number): number {
-  db.attempts[proposalId] = (db.attempts[proposalId] ?? 0) + 1;
-  save();
-  return db.attempts[proposalId];
+  // First run. Carry over accounts from the old single-server store.
+  try {
+    accounts = JSON.parse(readFileSync(join(DATA_DIR, "verdicts.json"), "utf8")).accounts ?? [];
+  } catch {
+    // nothing to carry over
+  }
 }
 
 /**
  * Accounts that connected a wallet to this app. The DAO contract keys claims by account and can't list who
  * claimed a bounty. The bounty dashboard checks these accounts, among others, to find participants.
  */
-export const knownAccounts = () => db.accounts;
+export const knownAccounts = () => accounts;
 export function rememberAccount(accountId: string) {
-  if (db.accounts.includes(accountId)) return;
-  db.accounts.push(accountId);
-  save();
+  if (accounts.includes(accountId)) return;
+  accounts.push(accountId);
+  writeFileSync(FILE + ".tmp", JSON.stringify(accounts));
+  renameSync(FILE + ".tmp", FILE);
 }
