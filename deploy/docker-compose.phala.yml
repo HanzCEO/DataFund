@@ -1,9 +1,10 @@
 # Phala Cloud (dstack) deployment of the verifier enclave.
 # Secrets (NEAR_AI_API_KEY, PINATA_JWT) are set as encrypted env vars in Phala. Only the CVM can decrypt them.
-# Use an image digest, not a tag. The compose file is hashed into the attestation, and a digest makes it reproducible.
+# The image is pinned by digest. The compose file is hashed into the attestation, and a digest makes that hash
+# point at exactly one build. Update the digest after every push.
 services:
   enclave:
-    image: ${ENCLAVE_IMAGE:?set ENCLAVE_IMAGE to registry/name@sha256:...}
+    image: docker.io/hanzlearn/datafund-enclave@sha256:7c3cbb9e7fc5e116d6f7acf51ed142708a7b9e45ef23fbb84a1597b1083e7625
     restart: always
     ports:
       - "8788:8788"
@@ -13,7 +14,7 @@ services:
       - enclave-data:/data
     environment:
       - NEAR_NETWORK=testnet
-      - DAO_ID=${DAO_ID}
+      - DAO_ID=datafund-41bbcc.sputnik-v2.testnet
       - NEAR_AI_API_KEY=${NEAR_AI_API_KEY}
       - NEAR_AI_MODEL=z-ai/glm-5.3-flash
       - PINATA_JWT=${PINATA_JWT}
