@@ -77,6 +77,44 @@ DAO ──payout on approval──▶ Contributor
 - **AI.** NEAR AI Cloud (`z-ai/glm-5.3-flash`, a TEE-verifiable model), in batches of 25 rows. Rows are always sent
   without the submitted answers, and replies missing most answers are retried rather than counted as disagreement.
 
+## Diagrams
+
+Each diagram has an SVG for reading and an `.excalidraw` source next to it in `docs/diagrams`. Open the source at
+[excalidraw.com](https://excalidraw.com) to edit it.
+
+### Use cases
+
+Who does what. The requester is a community member who also proposes bounties. The verifier enclave and NEAR AI
+Cloud are system actors.
+
+![DataFund use cases](docs/diagrams/use-case.svg)
+
+### Architecture
+
+The browser encrypts files and signs transactions. The public server relays sealed payloads and wakes or sleeps the
+enclave. The enclave runs in a Phala Cloud CVM and holds every key.
+
+![DataFund architecture](docs/diagrams/architecture.svg)
+
+### Data flow, level 0
+
+DataFund as one process, with the people and services it exchanges data with.
+
+![DFD level 0](docs/diagrams/dfd-level-0.svg)
+
+### Data flow, level 1
+
+The seven main processes and the three data stores. An entity marked with an asterisk is drawn twice to keep lines
+short.
+
+![DFD level 1](docs/diagrams/dfd-level-1.svg)
+
+### Data flow, level 2
+
+Process 4.0 Verify and vote in detail, from a payout claim on chain to the enclave's vote.
+
+![DFD level 2](docs/diagrams/dfd-level-2.svg)
+
 ## Run it
 
 You need Node 20+ (tested on Node 24). Rust is not needed.
