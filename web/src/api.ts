@@ -13,6 +13,8 @@ export type Config = {
   /** Whether the enclave can hand out IPFS upload URLs. */
   pinning: boolean;
   maxBytes: number;
+  /** Scale to zero is on. The enclave CVM sleeps when idle and wakes on demand. */
+  scaling: boolean;
 };
 export type Bounty = BountyView & { claims: number; spec: Required<DatasetSpec> | null };
 export type State = {
@@ -25,6 +27,7 @@ export type State = {
   bounties: Bounty[];
   proposals: ProposalView[];
   verdicts: Record<string, Verdict>;
+  enclave: "awake" | "asleep" | "waking" | "stopping" | "unknown";
 };
 export type RunFn = (label: string, f: () => Promise<unknown>) => Promise<void>;
 export type { Attestation };
@@ -35,3 +38,6 @@ export const api = async <T,>(path: string, body?: unknown): Promise<T> => {
   if (!res.ok || json.error) throw new Error(json.error ?? `HTTP ${res.status}`);
   return json;
 };
+
+/** Start the enclave CVM ahead of a request that will need it. Fire and forget. */
+export const warmUp = () => void fetch("/api/wake", { method: "POST" }).catch(() => undefined);

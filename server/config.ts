@@ -27,3 +27,10 @@ export const PORT = Number(env("PORT", "8787"));
 export const PUBLIC_URL = env("PUBLIC_URL", `http://localhost:${PORT}`);
 
 export const EXPLORER = NETWORK === "mainnet" ? "https://nearblocks.io" : "https://testnet.nearblocks.io";
+
+/** Scale to zero. Needs a Phala Cloud API key and the CVM's id (app id, UUID or name). Off when either is missing. */
+export const PHALA_CLOUD_API_KEY = process.env.PHALA_CLOUD_API_KEY ?? "";
+export const PHALA_CVM_ID = process.env.PHALA_CVM_ID ?? "";
+export const PHALA_API = env("PHALA_API", "https://cloud-api.phala.com/api/v1").replace(/\/$/, "");
+/** Minutes without work or requests before the enclave CVM is shut down. */
+export const IDLE_MINUTES = Number(env("IDLE_MINUTES", "10"));

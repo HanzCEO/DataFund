@@ -5,7 +5,7 @@ import { Check, Cpu, Download, ExternalLink, Lock, ShieldAlert, ShieldCheck, Tri
 import { decryptFile, encryptFile, fromB64, fromUtf8, openJson, seal, sha256Hex, toB64, utf8, x25519Keypair } from "../../shared/crypto";
 import { TASK_INFO } from "../../shared/spec";
 import type { DatasetSpec, ProposalView, RowJudgement, SubmissionRef, Verdict, VerdictDetails } from "../../shared/types";
-import { api, type Attestation, type Bounty, type Config, type RunFn, type State } from "./api";
+import { api, warmUp, type Attestation, type Bounty, type Config, type RunFn, type State } from "./api";
 import { TGAS, callDao, signReview } from "./near";
 
 type Spec = Required<DatasetSpec>;
@@ -41,6 +41,8 @@ export function useAttestation() {
   return { att, err };
 }
 
+const PHASE: Record<State["enclave"], string> = { awake: "Awake", asleep: "Asleep", waking: "Waking up", stopping: "Going to sleep", unknown: "Checking" };
+
 export function EnclavePanel({ cfg, state }: { cfg: Config; state: State }) {
   const { att, err } = useAttestation();
   const { approved, proposal, inRole } = approvalOf(att, state);
@@ -51,6 +53,12 @@ export function EnclavePanel({ cfg, state }: { cfg: Config; state: State }) {
         <h2>Verifier enclave</h2>
         <span className={`tag ${att?.mode === "tee" ? "" : "warn"}`}>{att ? (att.mode === "tee" ? "Intel TDX" : "Dev mode") : err ? "Offline" : "…"}</span>
       </header>
+      {cfg.scaling && (
+        <p className="small muted enclave-phase">
+          <span className={`status ${state.enclave === "awake" ? "s-Approved" : state.enclave === "waking" ? "s-InProgress" : ""}`}>{PHASE[state.enclave]}</span>{" "}
+          {state.enclave === "awake" ? "Shuts down after a quiet spell to save cost." : "Starts on demand. The first request waits about a minute."}
+        </p>
+      )}
       <ul className="enclave-facts small">
         <li>
           {approved ? <ShieldCheck size={16} aria-hidden /> : <ShieldAlert size={16} aria-hidden className="warn-icon" />}
@@ -115,6 +123,11 @@ export function SubmitPanel({ b, spec, cfg, state, run }: { b: Bounty; spec: Spe
   const [err, setErr] = useState("");
   const sealed = useRef<Sealed>(undefined);
   const { approved } = approvalOf(att, state);
+  // Opening the form starts a sleeping enclave. It's usually awake by the time the file is ready.
+  useEffect(() => {
+    if (cfg.scaling) warmUp();
+  }, [cfg.scaling]);
+  const sleepy = cfg.scaling && state.enclave !== "awake";
 
   // One encryption per content. The hosted file, the precheck and the on-chain key must all match.
   const encrypt = async (): Promise<Sealed> => {
@@ -139,7 +152,7 @@ export function SubmitPanel({ b, spec, cfg, state, run }: { b: Bounty; spec: Spe
   };
 
   const precheck = () =>
-    step("Checking in the enclave…", async () => {
+    step(sleepy ? "Waking the enclave (about a minute), then checking…" : "Checking in the enclave…", async () => {
       const s = await encrypt();
       const reply = x25519Keypair();
       const r = await api<{ sealed: string }>("/api/enclave/precheck", { bountyId: b.id, blob: toB64(s.blob), key: s.sealedKey, sha256: s.sha256, replyKey: toB64(reply.publicKey) });

@@ -11,11 +11,23 @@ import { verifySigned } from "./nep413.js";
 import { pinningEnabled, signedUploadUrl } from "./storage.js";
 import { allVerdicts, getDetails, getVerdict, putVerdict } from "./store.js";
 import { aiEnabled, allowsPlaintext, fileKeyOf, parseSubmission, verify } from "./verifier.js";
-import { startWatcher } from "./watcher.js";
+import { activeJobs, startWatcher } from "./watcher.js";
 
 const keys = await initKeys();
 const app = new Hono();
 app.onError((e, c) => c.json({ error: e.message }, 400));
+
+// Requests in progress (besides /status itself). Part of the busy count the public server checks before sleep.
+let activeRequests = 0;
+app.use(async (c, next) => {
+  if (c.req.path === "/status") return next();
+  activeRequests++;
+  try {
+    await next();
+  } finally {
+    activeRequests--;
+  }
+});
 
 app.get("/attestation", async (c) => c.json(await attestation()));
 
@@ -23,6 +35,7 @@ app.get("/status", async (c) =>
   c.json({
     mode: keys.mode, accountId: keys.accountId, balance: await balance(), dao: DAO_ID, network: NETWORK,
     aiEnabled: aiEnabled(), model: NEAR_AI_MODEL, minScore: MIN_SCORE, pinning: pinningEnabled(), maxBytes: MAX_BYTES,
+    busy: activeJobs() + activeRequests,
   }),
 );
 

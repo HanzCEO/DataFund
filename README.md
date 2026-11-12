@@ -109,6 +109,20 @@ sampling, all three task types, the facade file and manual sampling limits).
    This funds the enclave's implicit account for gas and files the role proposals. Then the council votes.
    Removing the old verifier matters, since with two members in the role a single verifier vote is no longer enough.
 
+### Scale to zero
+
+Set `PHALA_CLOUD_API_KEY` and `PHALA_CVM_ID` for the public server and it runs the enclave only when needed.
+- It wakes the CVM (Phala API `start`) for a payout claim without a vote, a manual review that was decided or ran
+  out of time, a payout whose key isn't released yet, or any browser request to the enclave. Opening the submit
+  form wakes it ahead of time.
+- It shuts the CVM down gracefully (`shutdown`) after `IDLE_MINUTES` (default 10) with no work, no requests and no
+  running jobs in the enclave.
+- Verdicts, the attestation and the enclave status are cached on the public server. The app keeps showing them
+  while the enclave sleeps.
+- Keys survive this, since they come from the app id. **Never delete the CVM to save money.** A new CVM has new
+  keys. Files sealed to the old key can no longer be decrypted, and the DAO has to approve the new enclave.
+- Waking takes about a minute. Proposals stay open for 72 h, so nothing is missed while it sleeps.
+
 ### Your own DAO
 
 `.env.example` points at the live demo DAO `datafund-41bbcc.sputnik-v2.testnet`. To run your own, do this.
@@ -185,6 +199,8 @@ These runs were verified on testnet with the earlier single-server verifier.
   taken back.
 - **Manual review needs the requester to have proposed the bounty.** The enclave only accepts a reviewer named in
   the spec who also proposed the approved `AddBounty`. Otherwise auto review decides.
+- **Scale to zero is unverified on billing.** Phala's API docs don't say whether a stopped CVM still costs
+  anything (disk, reserved node). Check your Phala billing after a day of sleep.
 - **Proposal period.** This DAO's proposals expire after 72 h. The review window is capped at 60 h to stay inside that.
 - Testnet only. No real funds.
 

@@ -151,6 +151,8 @@ export interface Verdict {
   releasedKey?: string;
   voteTx?: string;
   voteError?: string;
+  /** The enclave stopped retrying and left the proposal to the council. */
+  abandoned?: boolean;
 }
 
 /** Private part of a verdict. Served sealed to the requester or contributor only. */

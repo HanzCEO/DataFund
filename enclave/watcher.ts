@@ -11,6 +11,8 @@ import { fetchBytes } from "./storage.js";
 
 const MAX_ATTEMPTS = 3;
 const inFlight = new Set<number>();
+/** Proposals being handled right now. The public server won't put the CVM to sleep while this is above zero. */
+export const activeJobs = () => inFlight.size;
 /** Seed block per proposal, fixed the first time the proposal is seen. A retry reuses it. */
 const seeds = new Map<number, { height: number; hash: string }>();
 
@@ -43,7 +45,11 @@ async function handle(p: ProposalView) {
   let verdict = getVerdict(p.id);
   try {
     if (!verdict || (verdict.voteError && !verdict.checks.some((c) => c.ok))) {
-      if (bumpAttempt(p.id) > MAX_ATTEMPTS) return; // leave it to the council
+      if (bumpAttempt(p.id) > MAX_ATTEMPTS) {
+        // Leave it to the council, and say so. A sleeping enclave must not be woken for it again.
+        if (verdict && !verdict.abandoned) putVerdict({ ...verdict, abandoned: true });
+        return;
+      }
       if (!seeds.has(p.id)) seeds.set(p.id, await finalBlock());
       const bounty = await getBounty(kind.bounty_id);
       if (!bounty) throw new Error(`Bounty ${kind.bounty_id} not found`);
