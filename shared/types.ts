@@ -18,7 +18,7 @@ export type ReviewMode = "auto" | "manual";
 export interface DatasetSpec {
   title: string;
   format: "jsonl" | "csv";
-  /** field name -> "string" | "number" | "a|b|c" (allowed labels) */
+  /** field name -> "string" | "number" | "boolean" | "a|b|c" (one of these labels). The requester defines them. */
   fields: Record<string, string>;
   minRows: number;
   guidelines: string;
@@ -34,6 +34,12 @@ export interface DatasetSpec {
   reviewHours?: number;
   /** Who can decrypt the dataset after payout. Defaults to public. */
   access?: Access;
+  /** Field the AI redoes blind and compares. Empty means no answer is checked. Fixed for qa and preference. */
+  answer?: string;
+  /** Fields a row may leave empty. */
+  optional?: string[];
+  /** What each field should hold, in the requester's words. Shown to contributors and to the AI. */
+  notes?: Record<string, string>;
 }
 
 /** JSON stored in the bounty_done proposal description. */

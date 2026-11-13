@@ -8,6 +8,7 @@ import {
   Coins,
   ChevronRight,
   ExternalLink,
+  Gavel,
   Hand,
   Hourglass,
   Landmark,
@@ -20,13 +21,15 @@ import {
   ShieldCheck,
   TriangleAlert,
   Upload,
+  Users,
   Wallet,
   X,
 } from "lucide-react";
 import type { Access, BountyClaim, DatasetSpec, ProposalView, ReviewMode, TaskType, Verdict } from "../../shared/types";
-import { labelsOf, MANUAL_MIN_ROWS, MAX_REVIEW_HOURS, MIN_SAMPLE, TASK_FIELDS, TASK_INFO } from "../../shared/spec";
+import { answerField, FIELD_KINDS, FIELD_NAME, kindOf, labelsOf, labelsOfType, MANUAL_MIN_ROWS, MAX_REVIEW_HOURS, MIN_SAMPLE, TASK_INFO, taskFields, type FieldKind } from "../../shared/spec";
 import { api, type Bounty, type Config, type RunFn, type State } from "./api";
 import { EnclavePanel, SubmitPanel, VerdictView } from "./submission";
+import { CouncilPage, DaoPage } from "./governance";
 import { Link, Navigate, Route, Routes, useLocation, useMatch, useNavigate, useNavigationType, useParams } from "react-router";
 import { TGAS, callDao, chipIn, currentAccount, initWallet, showSignIn, signOut, toNear, toYocto } from "./near";
 
@@ -242,7 +245,7 @@ export default function App() {
   return (
     <>
       <div className="app">
-        <Rail account={account} onPropose={openPropose} />
+        <Rail account={account} isCouncil={isCouncil} onPropose={openPropose} />
 
         <div className="col col-main">
           <Routes>
@@ -251,6 +254,8 @@ export default function App() {
               path="/bounty/:id"
               element={<DashboardRoute cfg={cfg} state={state} account={account} isCouncil={isCouncil} claims={claims} run={run} />}
             />
+            <Route path="/dao" element={<DaoPage cfg={cfg} state={state} account={account} isCouncil={isCouncil} run={run} />} />
+            <Route path="/council" element={<CouncilPage cfg={cfg} state={state} account={account} isCouncil={isCouncil} run={run} />} />
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
         </div>
@@ -288,13 +293,15 @@ function Mark() {
   );
 }
 
-function Rail({ account, onPropose }: { account: string | null; onPropose: () => void }) {
+function Rail({ account, isCouncil, onPropose }: { account: string | null; isCouncil: boolean; onPropose: () => void }) {
   // Shelf and treasury sit beside every page, so those links keep the current path. Overview and activity live on "/".
   const links: [string, string, ReactNode][] = [
     ["/#overview", "Overview", <LayoutGrid {...ICON} />],
     ["#bounties", "Open bounties", <Layers {...ICON} />],
     ["#treasury", "Treasury", <Landmark {...ICON} />],
     ["/#activity", "Activity", <Activity {...ICON} />],
+    ["/dao", "DAO", <Users {...ICON} />],
+    ...(isCouncil ? ([["/council", "Council desk", <Gavel {...ICON} />]] as [string, string, ReactNode][]) : []),
   ];
   return (
     <aside className="rail">
@@ -695,24 +702,132 @@ function HowItWorks({ cfg, state, account }: { cfg: Config; state: State; accoun
 
 const bountyDone = (p: ProposalView) => (typeof p.kind === "object" ? (p.kind.BountyDone as { bounty_id: number; receiver_id: string } | undefined) : undefined);
 
+/** One column of the dataset as the requester describes it in the form. */
+type FieldRow = { id: number; name: string; kind: FieldKind; labels: string; note: string; optional: boolean };
+
+let fieldSeq = 0;
+const newField = (f: Partial<FieldRow> = {}): FieldRow => ({ id: ++fieldSeq, name: "", kind: "string", labels: "", note: "", optional: false, ...f });
+const splitLabels = (s: string) => [...new Set(s.split(",").map((l) => l.trim()).filter(Boolean))];
+const typeOf = (r: FieldRow) => (r.kind === "labels" ? splitLabels(r.labels).join("|") : r.kind);
+
+/** Problems with a field list, keyed by row id. A spec with any problem cannot be proposed. */
+function fieldProblems(rows: FieldRow[], reserved: string[]): Map<number, string> {
+  const out = new Map<number, string>();
+  const seen = new Set(reserved);
+  for (const r of rows) {
+    const name = r.name.trim();
+    if (!name) out.set(r.id, "Give the field a name");
+    else if (!FIELD_NAME.test(name)) out.set(r.id, "Use letters, digits, _ . or - and start with a letter or _");
+    else if (seen.has(name)) out.set(r.id, `There is already a field called ${name}`);
+    else if (r.kind === "labels" && splitLabels(r.labels).some((l) => l.includes("|"))) out.set(r.id, "Labels cannot contain |");
+    else if (r.kind === "labels" && splitLabels(r.labels).length < 2) out.set(r.id, "List at least two labels, separated by commas");
+    seen.add(name);
+  }
+  return out;
+}
+
+/** Editor for the columns every row of the dataset must have. Task fields are shown locked above the requester's own. */
+function FieldsEditor({ task, rows, setRows, answer, setAnswer, problems }: {
+  task: TaskType; rows: FieldRow[]; setRows: (r: FieldRow[]) => void; answer: string; setAnswer: (a: string) => void; problems: Map<number, string>;
+}) {
+  const core = taskFields(task);
+  const edit = (id: number, patch: Partial<FieldRow>) => setRows(rows.map((r) => (r.id === id ? { ...r, ...patch } : r)));
+  const labelRows = rows.filter((r) => r.kind === "labels" && r.name.trim());
+  return (
+    <div className="wide fields-editor">
+      <div className="fields-head">
+        <span>Fields in each row</span>
+        <span className="small muted">Describe every column you want. Notes go to contributors and the AI verifier.</span>
+      </div>
+      {Object.entries(core).map(([name, type]) => (
+        <div className="field-row locked" key={name}>
+          <code>{name}</code>
+          <span>{type.includes("|") ? `${FIELD_KINDS.labels} ${type.split("|").join(" / ")}` : FIELD_KINDS[kindOf(type)]}</span>
+          <span className="small muted">Needed for {TASK_INFO[task].name.toLowerCase()}</span>
+        </div>
+      ))}
+      {rows.map((r) => (
+        <div className="field-row" key={r.id}>
+          <input aria-label="Field name" placeholder="field_name" value={r.name} onChange={(e) => edit(r.id, { name: e.target.value })} />
+          <select aria-label="Field type" value={r.kind} onChange={(e) => edit(r.id, { kind: e.target.value as FieldKind })}>
+            {(Object.keys(FIELD_KINDS) as FieldKind[]).map((k) => <option key={k} value={k}>{FIELD_KINDS[k]}</option>)}
+          </select>
+          {r.kind === "labels" ? (
+            <input aria-label="Labels" placeholder="spam, ham, unsure" value={r.labels} onChange={(e) => edit(r.id, { labels: e.target.value })} />
+          ) : <span className="field-gap" />}
+          <input className="field-note" aria-label="What this field holds" placeholder="What this field holds" value={r.note} onChange={(e) => edit(r.id, { note: e.target.value })} />
+          <label className="field-opt" title={answer && answer === r.name.trim() ? "The checked answer is always required" : undefined}>
+            <input type="checkbox" checked={r.optional && answer !== r.name.trim()} disabled={!!answer && answer === r.name.trim()} onChange={(e) => edit(r.id, { optional: e.target.checked })} />
+            Optional
+          </label>
+          <button className="ghost field-del" aria-label={`Remove ${r.name || "field"}`} title="Remove field" onClick={() => setRows(rows.filter((x) => x.id !== r.id))}>
+            <X size={16} strokeWidth={1.75} aria-hidden />
+          </button>
+          {problems.get(r.id) && <span className="field-err small err">{problems.get(r.id)}</span>}
+        </div>
+      ))}
+      <div className="fields-foot">
+        <button className="ghost" onClick={() => setRows([...rows, newField()])}>
+          <Plus size={16} strokeWidth={1.75} aria-hidden /> Add field
+        </button>
+        {task === "classification" && (
+          <label className="field-answer">AI checks
+            <select value={answer} onChange={(e) => setAnswer(e.target.value)}>
+              <option value="">Nothing (rules and quality only)</option>
+              {labelRows.map((r) => <option key={r.id} value={r.name.trim()}>{r.name.trim()}</option>)}
+            </select>
+          </label>
+        )}
+      </div>
+      <p className="small muted form-note">
+        {task === "classification"
+          ? answer
+            ? `The AI ${TASK_INFO.classification.blind} for "${answer}" without seeing the submitted one. Only label fields can be checked.`
+            : "Add a label field and pick it above to have the AI check every answer."
+          : `The AI ${TASK_INFO[task].blind} without seeing the submitted answer.`}
+      </p>
+    </div>
+  );
+}
+
 function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Config; state: State; account: string | null; run: RunFn; open: boolean; setOpen: (v: boolean) => void }) {
   const [f, setF] = useState({
     title: "", guidelines: "", format: "jsonl", task: "classification" as TaskType, review: "auto" as ReviewMode, access: "public" as Access,
-    textField: "text", labelField: "label", labels: "positive, negative", minAgreement: "",
-    minRows: "20", sampleSize: String(MIN_SAMPLE), reviewHours: "48", reward: "1", slots: "3", hours: "48",
+    minAgreement: "", minRows: "20", sampleSize: String(MIN_SAMPLE), reviewHours: "48", reward: "1", slots: "3", hours: "48",
   });
+  // Classification fields are all the requester's. Other tasks keep their own extra fields next to the fixed ones.
+  const [custom, setCustom] = useState<FieldRow[]>(() => [
+    newField({ name: "text", note: "" }),
+    newField({ name: "label", kind: "labels", labels: "positive, negative" }),
+  ]);
+  const [extra, setExtra] = useState<FieldRow[]>([]);
+  const [answer, setAnswer] = useState("label");
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
   const manual = f.review === "manual";
+  const classify = f.task === "classification";
+  const rows = classify ? custom : extra;
+  const reserved = Object.keys(taskFields(f.task));
+  const problems = useMemo(() => fieldProblems(rows, reserved), [rows, reserved.join()]);
+  // Keep the checked field valid when its row is renamed, retyped or removed.
+  const checked = classify && custom.some((r) => r.name.trim() === answer && r.kind === "labels") ? answer : "";
   const spec = useMemo<DatasetSpec>(() => {
-    const labels = f.labels.split(",").map((s) => s.trim()).filter(Boolean);
-    const fields =
-      f.task === "classification"
-        ? { [f.textField.trim() || "text"]: "string", ...(labels.length ? { [f.labelField.trim() || "label"]: labels.join("|") } : {}) }
-        : TASK_FIELDS[f.task];
+    const fields: Record<string, string> = { ...taskFields(f.task) };
+    const notes: Record<string, string> = {};
+    const optional: string[] = [];
+    for (const r of rows) {
+      const name = r.name.trim();
+      if (!name) continue;
+      fields[name] = typeOf(r);
+      if (r.note.trim()) notes[name] = r.note.trim();
+      if (r.optional && name !== checked) optional.push(name);
+    }
     return {
       title: f.title.trim(),
       format: f.format as "jsonl" | "csv",
       fields,
+      ...(classify ? { answer: checked } : {}),
+      ...(optional.length ? { optional } : {}),
+      ...(Object.keys(notes).length ? { notes } : {}),
       minRows: Math.max(Number(f.minRows) || 1, manual ? MANUAL_MIN_ROWS : 1),
       guidelines: f.guidelines.trim(),
       task: f.task,
@@ -722,7 +837,8 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
       minAgreement: (Number(f.minAgreement) || Math.round(TASK_INFO[f.task].minAgreement * 100)) / 100,
       ...(manual ? { sampleSize: Math.max(MIN_SAMPLE, Number(f.sampleSize) || MIN_SAMPLE), reviewHours: Math.min(MAX_REVIEW_HOURS, Math.max(1, Number(f.reviewHours) || 48)) } : {}),
     };
-  }, [f, manual, account]);
+  }, [f, manual, account, rows, classify, checked]);
+  const fieldsOk = problems.size === 0 && Object.keys(spec.fields).length > 0;
 
   const propose = () =>
     run("Propose bounty", () =>
@@ -770,18 +886,14 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
               </select>
             </label>
             <label>Format<select value={f.format} onChange={set("format")}><option value="jsonl">JSONL</option><option value="csv">CSV</option></select></label>
-            {f.task === "classification" ? (
-              <>
-                <label>Text field<input value={f.textField} onChange={set("textField")} /></label>
-                <label>Label field<input value={f.labelField} onChange={set("labelField")} /></label>
-                <label className="wide">Allowed labels (comma-separated)<input value={f.labels} onChange={set("labels")} /></label>
-              </>
-            ) : (
-              <p className="wide small muted form-note">
-                Each row has {Object.keys(TASK_FIELDS[f.task]).map((k, i, all) => <Fragment key={k}><code>{k}</code>{i < all.length - 1 ? (i === all.length - 2 ? " and " : ", ") : ""}</Fragment>)}.
-                The AI {TASK_INFO[f.task].blind} without seeing the submitted answer.
-              </p>
-            )}
+            <FieldsEditor
+              task={f.task}
+              rows={rows}
+              setRows={classify ? setCustom : setExtra}
+              answer={checked}
+              setAnswer={setAnswer}
+              problems={problems}
+            />
             <label>Review
               <select value={f.review} onChange={set("review")}>
                 <option value="auto">Automatic (enclave decides)</option>
@@ -812,7 +924,7 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
             <label>Hours to deliver after claiming<input value={f.hours} onChange={set("hours")} inputMode="numeric" /></label>
           </div>
           <div className="row">
-            <button disabled={!account || !spec.title} onClick={propose}>Propose bounty</button>
+            <button disabled={!account || !spec.title || !fieldsOk} onClick={propose}>Propose bounty</button>
             {!account && <span className="muted small">Connect a wallet to propose.</span>}
             {account && (manual || f.access === "requester") && (
               <span className="muted small">
@@ -826,7 +938,7 @@ function ProposeBounty({ cfg, state, account, run, open, setOpen }: { cfg: Confi
   );
 }
 
-function describe(p: ProposalView): { title: string; sub?: string } {
+export function describe(p: ProposalView): { title: string; sub?: string } {
   const k = p.kind as any;
   if (typeof k === "string") return { title: k };
   if (k.AddBounty) {
@@ -871,7 +983,7 @@ function ActivityPanel({ cfg, state, account, isCouncil, needle, query, daoUrl, 
 }
 
 /** One line per proposal with number, title, score and status. Details (who, when, votes, AI verdict) open on click. */
-function ProposalRow({ p, d, cfg, account, canVote, verdict, run }: { p: ProposalView; d: { title: string; sub?: string }; cfg: Config; account: string | null; canVote: boolean; verdict?: Verdict; run: RunFn }) {
+export function ProposalRow({ p, d, cfg, account, canVote, verdict, run }: { p: ProposalView; d: { title: string; sub?: string }; cfg: Config; account: string | null; canVote: boolean; verdict?: Verdict; run: RunFn }) {
   const [open, setOpen] = useState(false);
   const isPayout = !!bountyDone(p);
   const voteAs = (action: "VoteApprove" | "VoteReject") =>
@@ -1163,7 +1275,12 @@ function BountyDashboard({ id, cfg, state, account, isCouncil, claim, run }: { i
                 {Object.entries(spec.fields).map(([field, type]) => (
                   <Fragment key={field}>
                     <dt><code>{field}</code></dt>
-                    <dd>{type.includes("|") ? type.split("|").join(" / ") : type}</dd>
+                    <dd>
+                      {kindOf(type) === "labels" ? labelsOfType(type).join(" / ") : FIELD_KINDS[kindOf(type)]}
+                      {answerField(spec) === field && <span className="muted"> (checked by the AI)</span>}
+                      {spec.optional?.includes(field) && <span className="muted"> (optional)</span>}
+                      {spec.notes?.[field] && <span className="field-desc small muted">{spec.notes[field]}</span>}
+                    </dd>
                   </Fragment>
                 ))}
               </dl>

@@ -7,7 +7,7 @@ import { FULL_SCAN_ROWS, MIN_SCORE, NEAR_AI_API_KEY, NEAR_AI_BASE_URL, NEAR_AI_M
 import { parseRows, rowText, sampleIndexes, structuralChecks, type Row, type Spec } from "./dataset.js";
 import { getKeys } from "./keys.js";
 import { fetchBytes } from "./storage.js";
-import { blindRow, compare, instruction, submitted, unblind, type BlindRow } from "./tasks.js";
+import { blindRow, compare, fieldNotes, instruction, submitted, unblind, type BlindRow } from "./tasks.js";
 
 const ai = NEAR_AI_API_KEY ? new OpenAI({ baseURL: NEAR_AI_BASE_URL, apiKey: NEAR_AI_API_KEY }) : undefined;
 export const aiEnabled = () => Boolean(ai);
@@ -228,11 +228,12 @@ async function aiReview(spec: Spec, rows: Row[], idx: number[], seedHex: string)
         [
           `The dataset is "${spec.title}".`,
           `The guidelines say "${spec.guidelines}"`,
+          fieldNotes(spec),
           instruction(spec),
           "Also rate the overall quality of these rows 0-100 (realistic, diverse, follows guidelines, no personal data).",
           `Use this JSON shape {"answers":[{"n":0,"answer":"...","reason":"<10 words"}],"quality":0,"summary":"<2 sentences"}`,
           `<rows>\n${JSON.stringify(batch.map((b, k) => ({ n: k, ...b.shown })))}\n</rows>`,
-        ].join("\n"),
+        ].filter(Boolean).join("\n"),
         3000,
       );
       // A reply missing most answers is a model failure, not a verdict. Retry, then fail the AI review.

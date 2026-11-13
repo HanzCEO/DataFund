@@ -1,5 +1,5 @@
 // What the AI sees for each task type and how its blind answer is compared with the submitted one.
-import { answerField, labelsOf } from "../shared/spec.js";
+import { answerField, labelsOf, TASK_FIELDS } from "../shared/spec.js";
 import type { Row, Spec } from "./dataset.js";
 
 export interface BlindRow {
@@ -21,7 +21,8 @@ export function blindRow(spec: Spec, row: Row, rowIndex: number, n: number, seed
   if (spec.task === "preference") {
     const swap = swapBit(seedHex, rowIndex);
     const a = String(row.response_a ?? ""), b = String(row.response_b ?? "");
-    return { n, row: rowIndex, swap, shown: { prompt: String(row.prompt ?? ""), response_a: swap ? b : a, response_b: swap ? a : b } };
+    const extra = Object.keys(spec.fields).filter((f) => !(f in TASK_FIELDS.preference)).map((f) => [f, String(row[f] ?? "")]);
+    return { n, row: rowIndex, swap, shown: { prompt: String(row.prompt ?? ""), response_a: swap ? b : a, response_b: swap ? a : b, ...Object.fromEntries(extra) } };
   }
   const shown = Object.fromEntries(
     Object.keys(spec.fields).filter((f) => f !== answer).map((f) => [f, String(row[f] ?? "")]),
@@ -42,6 +43,12 @@ export function instruction(spec: Spec): string {
   const labels = labelsOf(spec);
   const f = answerField(spec);
   return f ? `For each row, choose the correct "${f}" from ${labels.join(", ")} and put it in "answer".` : 'Put "-" in "answer" for each row.';
+}
+
+/** The requester's description of each field, for the prompt. The answer field's note is kept because it explains the labels. */
+export function fieldNotes(spec: Spec): string {
+  const lines = Object.entries(spec.notes).map(([f, n]) => `- ${f}: ${n}`);
+  return lines.length ? `The requester describes the fields like this\n${lines.join("\n")}` : "";
 }
 
 /** The submitted answer, in the same terms as the model's. */

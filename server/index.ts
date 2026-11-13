@@ -117,6 +117,16 @@ app.get("/api/bounties/:id", async (c) => {
   return c.json(body);
 });
 
+/** The DAO's config, full policy and every proposal, newest first. Backs the DAO and council pages. */
+let daoCache: { at: number; body: unknown } | undefined;
+app.get("/api/dao", async (c) => {
+  if (daoCache && Date.now() - daoCache.at < 6000) return c.json(daoCache.body as object);
+  const [config, policy, proposals] = await Promise.all([view<any>("get_config"), view<any>("get_policy"), getAllProposals()]);
+  const body = { config, policy, proposals: proposals.reverse(), verdicts: cachedVerdicts() };
+  daoCache = { at: Date.now(), body };
+  return c.json(body);
+});
+
 /**
  * Relay to the enclave. Everything private in these calls is encrypted end to end between the browser and the
  * enclave (sealed file keys in, sealed answers out). Relaying here reveals nothing. A sleeping enclave is woken

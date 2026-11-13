@@ -1,5 +1,5 @@
 // Parsing and deterministic checks. These run on every row inside the enclave.
-import { answerField } from "../shared/spec.js";
+import { answerField, kindOf, labelsOfType } from "../shared/spec.js";
 import type { Check, DatasetSpec } from "../shared/types.js";
 
 export type Spec = Required<DatasetSpec>;
@@ -67,15 +67,15 @@ export function rowText(row: Row, spec: Spec): string {
 const EMAIL = /[\w.+-]+@[\w-]+\.[\w.-]+/;
 const PHONE = /(?:\+?\d[\s().-]?){9,}\d/;
 const INJECTION = /ignore (all |any )?(previous|prior|above) instructions|you are (now )?an? (ai|assistant)|system prompt|score (this|it) (100|highly)|(always|must) (answer|choose|pick) ["']?[ab]\b/i;
+const BOOL = new Set(["true", "false"]);
 const HARD = ["Enough rows", "Matches schema", "No personal data", "No prompt injection"];
 
 /** Deterministic checks over every row. Returns checks plus a 0-100 structural score. Any hard failure forces rejection. */
 export function structuralChecks(rows: Row[], parseErrors: number, spec: Spec) {
   const checks: Check[] = [];
   const fieldNames = Object.keys(spec.fields);
-  const enums = Object.fromEntries(
-    Object.entries(spec.fields).filter(([, t]) => t.includes("|")).map(([k, t]) => [k, t.split("|")]),
-  );
+  const optional = new Set(spec.optional);
+  const answer = answerField(spec);
 
   checks.push({ name: "Parses cleanly", ok: parseErrors === 0, detail: parseErrors ? `${parseErrors} unparseable lines` : `${spec.format.toUpperCase()} OK` });
   checks.push({ name: "Enough rows", ok: rows.length >= spec.minRows, detail: `${rows.length} rows (min ${spec.minRows})` });
@@ -83,10 +83,12 @@ export function structuralChecks(rows: Row[], parseErrors: number, spec: Spec) {
   const badSchema = rows.filter((r) =>
     fieldNames.some((f) => {
       const v = r[f], t = spec.fields[f];
-      if (v === undefined || v === null || v === "") return true;
-      if (enums[f]) return !enums[f].includes(String(v));
-      if (t === "number") return Number.isNaN(Number(v));
-      return typeof v !== "string" && typeof v !== "number";
+      if (v === undefined || v === null || v === "") return !optional.has(f);
+      const kind = kindOf(t);
+      if (kind === "labels") return !labelsOfType(t).includes(String(v));
+      if (kind === "number") return typeof v === "boolean" || Number.isNaN(Number(v));
+      if (kind === "boolean") return !BOOL.has(String(v).toLowerCase());
+      return typeof v !== "string" && typeof v !== "number" && typeof v !== "boolean";
     }),
   ).length;
   checks.push({ name: "Matches schema", ok: badSchema === 0, detail: badSchema ? `${badSchema} rows with missing or invalid fields` : `has fields ${fieldNames.join(", ")}` });
@@ -108,7 +110,10 @@ export function structuralChecks(rows: Row[], parseErrors: number, spec: Spec) {
     checks.push({ name: "Responses differ", ok: same <= Math.floor(rows.length * 0.02), detail: `${same} rows with identical responses` });
   }
 
-  for (const [f, labels] of Object.entries(enums)) {
+  // Only the checked answer has to be balanced. Other label fields (language, source) may be skewed on purpose.
+  const labels = answer ? labelsOfType(spec.fields[answer] ?? "") : [];
+  if (answer && labels.length) {
+    const f = answer;
     const counts = labels.map((l) => rows.filter((r) => String(r[f]) === l).length);
     const maxShare = rows.length ? Math.max(...counts) / rows.length : 1;
     checks.push({ name: `Balanced "${f}"`, ok: maxShare <= 0.75, detail: labels.map((l, i) => `${counts[i]} ${l}`).join(", ") });
